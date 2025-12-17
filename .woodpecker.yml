@@ -1,0 +1,57 @@
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      remote: ${GITEA_INTERNAL_URL}/platform.git
+      branch: main
+
+pipeline:
+  test:
+    image: python:3.11-slim
+    commands:
+      - cd hello-api
+      - pip install -r requirements.txt pytest
+      - pytest -q
+
+  build:
+    image: woodpeckerci/plugin-docker
+    settings:
+      repo: localhost:5000/hello-api
+      tags: ${CI_COMMIT_SHA}
+      dockerfile: hello-api/Dockerfile
+      context: hello-api
+      registry: localhost:5000
+    when:
+      status: [success]
+
+  scan:
+    image: aquasec/trivy:0.50.2
+    commands:
+      - trivy image --exit-code 1 --severity HIGH,CRITICAL localhost:5000/hello-api:${CI_COMMIT_SHA}
+    when:
+      status: [success]
+
+  push:
+    image: woodpeckerci/plugin-docker
+    settings:
+      repo: localhost:5000/hello-api
+      tags: ${CI_COMMIT_SHA}
+      dockerfile: hello-api/Dockerfile
+      context: hello-api
+      registry: localhost:5000
+      push: true
+    when:
+      status: [success]
+
+  update-gitops:
+    image: alpine/git
+    commands:
+      - git config --global user.email "ci@gitopslab.local"
+      - git config --global user.name "woodpecker"
+      - cd gitops/apps/hello
+      - sed -i "s#localhost:5000/hello-api:.*#localhost:5000/hello-api:${CI_COMMIT_SHA}#" deployment.yaml
+      - git add deployment.yaml
+      - git commit -m "chore: bump hello-api image to ${CI_COMMIT_SHA} [skip ci]" || echo "no changes"
+      - git push ${GITEA_INTERNAL_URL}/platform.git HEAD:main
+    when:
+      status: [success]
