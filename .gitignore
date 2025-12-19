@@ -1,0 +1,23 @@
+# Local environment and secrets
+.env
+.gitea_token
+patch-argocd.json
+lb-values.yaml
+
+# Tooling & vendor
+docker-cli/
+docker-cli.zip
+
+# Python / tests
+__pycache__/
+*.pyc
+
+# Logs / temp
+*.log
+tmp/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
