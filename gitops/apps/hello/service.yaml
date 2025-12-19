@@ -5,10 +5,11 @@ metadata:
   labels:
     app: hello-api
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app: hello-api
   ports:
     - name: http
-      port: 80
-      targetPort: 8000
+      port: 8088
+      targetPort: 80
+      nodePort: 30888

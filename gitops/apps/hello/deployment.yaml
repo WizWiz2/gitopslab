@@ -16,23 +16,20 @@ spec:
     spec:
       containers:
         - name: hello-api
-          image: localhost:5000/hello-api:dev
+          image: nginxdemos/hello:plain-text
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000
-          env:
-            - name: VERSION
-              value: "dev"
+            - containerPort: 80
           readinessProbe:
             httpGet:
-              path: /healthz
-              port: 8000
+              path: /
+              port: 80
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /healthz
-              port: 8000
+              path: /
+              port: 80
             initialDelaySeconds: 10
             periodSeconds: 20
           resources:
