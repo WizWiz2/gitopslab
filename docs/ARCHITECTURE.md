@@ -26,9 +26,12 @@ graph LR
 
 ## Network map (split-horizon)
 
-- Host Browser → `localhost:3000` → Gitea container
-- Host Browser → `localhost:8000` → Woodpecker server
-- Host Browser → `localhost:8080` → Argo CD server
+- Host Browser → `gitea.localhost:3000` → Gitea container
+- Host Browser → `woodpecker.localhost:8000` → Woodpecker server
+- Host Browser → `argocd.localhost:8081` → Argo CD server
+- Host Browser → `demo.localhost:8088` → Hello API (NodePort)
+- Host Browser → `https://dashboard.localhost:32443` → Kubernetes Dashboard (NodePort)
+- Host Browser → `https://k8s.localhost:6550` → Kubernetes API (requires kubeconfig/token)
 - Woodpecker Agent → `gitea:3000` (internal clone URL)
 - Argo CD → `gitea:3000` (internal GitOps source)
 - CI push → `localhost:5000` (public registry endpoint)
@@ -39,4 +42,4 @@ graph LR
 2. Woodpecker pipeline runs tests, builds, scans with Trivy, and pushes the image to the local registry.
 3. Pipeline updates GitOps manifests with the new image tag (`[skip ci]` commit) and pushes back to Gitea.
 4. Argo CD watches the GitOps path and reconciles the cluster state.
-5. The Hello API is exposed through the k3d load balancer on port 8080, supporting `/`, `/healthz`, and `/version` endpoints.
+5. The Hello API is exposed via NodePort 30888 mapped to host `demo.localhost:8088`, supporting `/`, `/healthz`, and `/version` endpoints.

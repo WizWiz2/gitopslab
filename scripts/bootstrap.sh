@@ -33,7 +33,9 @@ create_cluster() {
     --api-port ${K3D_API_PORT} \
     --servers 1 --agents 1 \
     --port "8080:80@loadbalancer" \
+    --port "8081:30081@server:0" \
     --port "8088:30888@server:0" \
+    --port "32443:32443@server:0" \
     --network "${K3D_NETWORK:-bridge}" \
     --registry-use ${K3D_REGISTRY_NAME}:${K3D_REGISTRY_PORT} \
     --registry-config /workspace/scripts/registries.yaml \
@@ -70,6 +72,12 @@ ensure_loadbalancer_config() {
       add_nodes "server"
       echo "  80.tcp:"
       add_nodes "all"
+      echo "  30081.tcp:"
+      add_nodes "server"
+      echo "  30888.tcp:"
+      add_nodes "server"
+      echo "  32443.tcp:"
+      add_nodes "server"
       echo "settings:"
       echo "  workerConnections: 1024"
     } >"$tmpfile"
@@ -162,10 +170,12 @@ log "bootstrap completed"
 
 log "--------------------------------------------------------"
 log "DASHBOARD URLs (Host):"
-log " Gitea:      http://localhost:3000"
-log " Woodpecker: http://localhost:8000"
-log " Argo CD:    http://localhost:8080"
-log " Demo App:   http://localhost:8088"
+log " Gitea:              http://gitea.localhost:3000"
+log " Woodpecker:         http://woodpecker.localhost:8000"
+log " Argo CD:            http://argocd.localhost:8081"
+log " Ingress/LB (apps):  http://localhost:8080"
+log " Demo App:           http://demo.localhost:8088"
+log " K8s Dashboard:      https://localhost:32443"
 log "--------------------------------------------------------"
 log "Credentials:"
 log " User:       ${GITEA_ADMIN_USER:-gitops}"

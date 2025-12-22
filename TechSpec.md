@@ -158,9 +158,9 @@ platform/
 ⸻
 
 6) Интерфейсы и порты (с хоста)
-	•	Gitea: http://localhost:3000
-	•	Woodpecker: http://localhost:8000
-	•	Argo CD: http://localhost:8080 (должно открываться с хоста)
+	•	Gitea: http://gitea.localhost:3000
+	•	Woodpecker: http://woodpecker.localhost:8000
+	•	Argo CD: http://argocd.localhost:8081 (должно открываться с хоста)
 	•	Demo App: http://localhost:8088 (или чёткая инструкция, как получить доступ)
 
 Требование: bootstrap в конце печатает URLs + креды + команды быстрой проверки.
@@ -388,9 +388,9 @@ docs/RUNBOOKS.md
 13) Acceptance Criteria (готовность проекта)
 	1.	docker compose up -d → платформа готова без ручных шагов.
 	2.	Открываются UI:
-	•	http://localhost:3000 (Gitea)
-	•	http://localhost:8000 (Woodpecker)
-	•	http://localhost:8080 (Argo CD)
+	•	http://gitea.localhost:3000 (Gitea)
+	•	http://woodpecker.localhost:8000 (Woodpecker)
+	•	http://argocd.localhost:8081 (Argo CD)
 	3.	Demo app доступен с хоста и /version показывает текущую версию.
 	4.	Изменение кода → CI (test/build/scan/push) → bump gitops (skip ci) → Argo deploy.
 	5.	Есть DEMO.md, ARCHITECTURE.md (включая network map), RUNBOOKS.md.
@@ -398,3 +398,5 @@ docs/RUNBOOKS.md
 	7.	Есть wipe/reset сценарий и он работает (docker compose down -v).
 
 ⸻
+
+

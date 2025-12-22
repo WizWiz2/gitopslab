@@ -78,18 +78,12 @@ if !errorlevel! equ 0 (
         "%SystemRoot%\System32\timeout.exe" /t 10 /nobreak >nul
     )
 
-    REM Point Docker-compatible clients to the Podman machine socket
-    set "DOCKER_HOST=npipe:////./pipe/podman-machine-default"
-    set "CONTAINER_HOST=!DOCKER_HOST!"
-    set "PODMAN_HOST=!DOCKER_HOST!"
-
-    REM Prefer docker-compose when using Podman; fallback to podman compose if not installed
-    where docker-compose >nul 2>nul
-    if !errorlevel! equ 0 (
-        set "COMPOSE_CMD=docker-compose"
-    ) else (
-        set "COMPOSE_CMD=podman compose"
-    )
+    REM Prefer native podman compose to avoid docker-py issues
+    set "COMPOSE_CMD=podman compose"
+    REM Ensure we are not leaking docker-specific DOCKER_HOST when using podman
+    set "DOCKER_HOST="
+    set "CONTAINER_HOST="
+    set "PODMAN_HOST="
     echo [Start] Using !COMPOSE_CMD!
     goto :run
 )
@@ -99,6 +93,10 @@ where docker >nul 2>nul
 if !errorlevel! equ 0 (
     echo [Start] Docker found.
     set "COMPOSE_CMD=docker compose"
+    REM If Podman socket exists, point docker client to it (optional)
+    if exist "\\\\.\\pipe\\podman-machine-default" (
+        set "DOCKER_HOST=npipe:////./pipe/podman-machine-default"
+    )
     goto :run
 )
 
@@ -115,15 +113,41 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
+REM Detect container CLI for follow-up commands (token, kubeconfig)
+set "CTR_BIN=podman"
+where podman >nul 2>nul
+if !errorlevel! neq 0 (
+    set "CTR_BIN=docker"
+)
+
+REM Generate dashboard token and save locally
+echo [Start] Fetching Kubernetes Dashboard token...
+%CTR_BIN% exec platform-bootstrap /workspace/scripts/dashboard-token.sh > dashboard-token.txt 2>nul
+if exist dashboard-token.txt (
+    echo [Start] Dashboard token saved to dashboard-token.txt
+) else (
+    echo [Warn] Could not fetch dashboard token automatically. Use podman exec platform-bootstrap /workspace/scripts/dashboard-token.sh
+)
+
+REM Collect credentials/tokens for convenience
+echo [Start] Collecting credentials...
+%CTR_BIN% exec platform-bootstrap /workspace/scripts/collect-creds.sh > credentials.txt 2>nul
+if exist credentials.txt (
+    echo [Start] Credentials saved to credentials.txt
+) else (
+    echo [Warn] Could not collect credentials automatically.
+)
+
 echo [Start] Done! You can now access the dashboards.
 echo --------------------------------------------------------
-echo Gitea:       http://localhost:%GITEA_HTTP_PORT%
+echo Gitea:       http://gitea.localhost:%GITEA_HTTP_PORT%
 echo Gitea SSH:   ssh://git@localhost:%GITEA_SSH_PORT%
-echo Woodpecker:  http://localhost:%WOODPECKER_SERVER_PORT%
-echo Registry:    http://localhost:%REGISTRY_HTTP_PORT%/v2/
-echo Argo CD:     http://localhost:%ARGOCD_PORT%
+echo Woodpecker:  http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
+echo Registry:    http://registry.localhost:%REGISTRY_HTTP_PORT%/v2/
+echo Argo CD:     http://argocd.localhost:%ARGOCD_PORT%
 echo Ingress/LB:  http://localhost:8080
-echo K8s API:     https://localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
-echo Demo App:    http://localhost:8088
+echo K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
+echo Demo App:    http://demo.localhost:8088
+echo K8s Dashboard: https://dashboard.localhost:32443
 echo --------------------------------------------------------
 "%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul

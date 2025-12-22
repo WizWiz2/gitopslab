@@ -12,8 +12,8 @@ log "Waiting for Argo CD pods..."
 kubectl wait --for=condition=Ready pods --all -n argocd --timeout=300s
 
 # Экспонируем argocd-server наружу через k3d servicelb
-log "Patching Argo CD service to LoadBalancer..."
-kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"LoadBalancer","ports":[{"name":"http","port":80,"targetPort":8080}]}}' >/dev/null
+log "Patching Argo CD service to NodePort (30081)..."
+kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"NodePort","ports":[{"name":"https","port":443,"targetPort":8080,"nodePort":30081}]}}' >/dev/null
 
 # Get Gitea Token
 if [ -f /workspace/.gitea_token ]; then
