@@ -11,5 +11,5 @@ spec:
   ports:
     - name: http
       port: 8088
-      targetPort: 80
+      targetPort: 8000
       nodePort: 30888

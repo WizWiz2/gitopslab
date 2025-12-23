@@ -3,6 +3,8 @@
 .gitea_token
 patch-argocd.json
 lb-values.yaml
+credentials.txt
+dashboard-token.txt
 
 # Tooling & vendor
 docker-cli/
@@ -11,6 +13,7 @@ docker-cli.zip
 # Python / tests
 __pycache__/
 *.pyc
+ml/artifacts/
 
 # Logs / temp
 *.log
@@ -21,3 +24,7 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+# MCP / Agent
+mcp_config.json
+.gemini/

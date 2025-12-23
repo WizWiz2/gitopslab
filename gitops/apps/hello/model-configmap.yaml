@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-api-model
+  labels:
+    app: hello-api
+data:
+  MODEL_OBJECT: ml-models/iris.joblib
+  MODEL_SHA: seed

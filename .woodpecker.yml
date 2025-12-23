@@ -7,38 +7,63 @@ clone:
 
 pipeline:
   test:
-    image: python:3.11-slim
+    image: python:3.10-slim
     commands:
       - cd hello-api
       - pip install -r requirements.txt pytest
       - pytest -q
 
+  train-model:
+    image: python:3.10-slim
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow.localhost:8090
+      MLFLOW_EXPERIMENT_NAME: hello-api-training
+    commands:
+      - mkdir -p ml/artifacts
+      - pip install -r ml/requirements.txt
+      - MODEL_OBJECT="ml-models/iris-${CI_COMMIT_SHA}.joblib"
+      - python ml/train.py --output ml/artifacts/model.joblib --commit "${CI_COMMIT_SHA}" --model-object "${MODEL_OBJECT}" --model-sha-path ml/artifacts/model.sha
+      - echo "${MODEL_OBJECT}" > ml/artifacts/model.object
+
+  upload-model:
+    image: minio/mc:latest
+    environment:
+      MINIO_ENDPOINT: http://minio.localhost:9090
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    commands:
+      - MODEL_OBJECT=$(cat ml/artifacts/model.object)
+      - mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+      - mc mb --ignore-existing minio/ml-models
+      - mc cp ml/artifacts/model.joblib "minio/$MODEL_OBJECT"
+      - mc stat "minio/$MODEL_OBJECT"
+
   build:
     image: woodpeckerci/plugin-docker
     settings:
-      repo: localhost:5000/hello-api
+      repo: localhost:5002/hello-api
       tags: ${CI_COMMIT_SHA}
       dockerfile: hello-api/Dockerfile
       context: hello-api
-      registry: localhost:5000
+      registry: localhost:5002
     when:
       status: [success]
 
   scan:
     image: aquasec/trivy:0.50.2
     commands:
-      - trivy image --exit-code 1 --severity HIGH,CRITICAL localhost:5000/hello-api:${CI_COMMIT_SHA}
+      - trivy image --exit-code 1 --severity HIGH,CRITICAL localhost:5002/hello-api:${CI_COMMIT_SHA}
     when:
       status: [success]
 
   push:
     image: woodpeckerci/plugin-docker
     settings:
-      repo: localhost:5000/hello-api
+      repo: localhost:5002/hello-api
       tags: ${CI_COMMIT_SHA}
       dockerfile: hello-api/Dockerfile
       context: hello-api
-      registry: localhost:5000
+      registry: localhost:5002
       push: true
     when:
       status: [success]
@@ -49,8 +74,12 @@ pipeline:
       - git config --global user.email "ci@gitopslab.local"
       - git config --global user.name "woodpecker"
       - cd gitops/apps/hello
-      - sed -i "s#localhost:5000/hello-api:.*#localhost:5000/hello-api:${CI_COMMIT_SHA}#" deployment.yaml
-      - git add deployment.yaml
+      - MODEL_OBJECT=$(cat ../../../ml/artifacts/model.object)
+      - MODEL_SHA=$(cat ../../../ml/artifacts/model.sha)
+      - sed -i "s#^[[:space:]]*image:.*#          image: registry.localhost:5002/hello-api:${CI_COMMIT_SHA}#" deployment.yaml
+      - sed -i "s#MODEL_OBJECT:.*#MODEL_OBJECT: ${MODEL_OBJECT}#" model-configmap.yaml
+      - sed -i "s#MODEL_SHA:.*#MODEL_SHA: ${MODEL_SHA}#" model-configmap.yaml
+      - git add deployment.yaml model-configmap.yaml
       - git commit -m "chore: bump hello-api image to ${CI_COMMIT_SHA} [skip ci]" || echo "no changes"
       - git push ${GITEA_INTERNAL_URL}/platform.git HEAD:main
     when:

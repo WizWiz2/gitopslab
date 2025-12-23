@@ -8,6 +8,9 @@ log() { echo "[bootstrap] $*"; }
 : "${K3D_REGISTRY_NAME:=registry.localhost}"
 : "${K3D_REGISTRY_PORT:=5000}"
 : "${ARGOCD_VERSION:=2.10.7}"
+: "${MLFLOW_PORT:=8090}"
+: "${MINIO_API_PORT:=9090}"
+: "${MINIO_CONSOLE_PORT:=9091}"
 
 if ! command -v k3d >/dev/null 2>&1; then
   log "k3d not available; container build is expected to install it"
@@ -35,6 +38,9 @@ create_cluster() {
     --port "8080:80@loadbalancer" \
     --port "8081:30081@server:0" \
     --port "8088:30888@server:0" \
+    --port "${MLFLOW_PORT}:30902@server:0" \
+    --port "${MINIO_API_PORT}:30900@server:0" \
+    --port "${MINIO_CONSOLE_PORT}:30901@server:0" \
     --port "32443:32443@server:0" \
     --network "${K3D_NETWORK:-bridge}" \
     --registry-use ${K3D_REGISTRY_NAME}:${K3D_REGISTRY_PORT} \
@@ -76,6 +82,12 @@ ensure_loadbalancer_config() {
       add_nodes "server"
       echo "  30888.tcp:"
       add_nodes "server"
+      echo "  30902.tcp:"
+      add_nodes "server"
+      echo "  30900.tcp:"
+      add_nodes "server"
+      echo "  30901.tcp:"
+      add_nodes "server"
       echo "  32443.tcp:"
       add_nodes "server"
       echo "settings:"
@@ -87,6 +99,17 @@ ensure_loadbalancer_config() {
   fi
 
   docker start "$lb" >/dev/null 2>&1 || true
+}
+
+patch_registry_hosts() {
+  local host_ip
+  host_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-serverlb" 2>/dev/null || true)
+  if [ -z "$host_ip" ]; then
+    host_ip="10.88.0.1"
+  fi
+  k3d node list --no-headers | awk '{print $1}' | while read -r node; do
+    docker exec "$node" sh -c "grep -q 'registry.localhost' /etc/hosts || echo \"$host_ip registry.localhost\" >> /etc/hosts"
+  done
 }
 
 ensure_kubeconfig() {
@@ -141,6 +164,7 @@ bootstrap() {
   create_registry
   create_cluster
   ensure_loadbalancer_config
+  patch_registry_hosts
   ensure_kubeconfig
   wait_for_k8s_api
   install_argocd
@@ -175,6 +199,9 @@ log " Woodpecker:         http://woodpecker.localhost:8000"
 log " Argo CD:            http://argocd.localhost:8081"
 log " Ingress/LB (apps):  http://localhost:8080"
 log " Demo App:           http://demo.localhost:8088"
+log " MLflow:             http://mlflow.localhost:${MLFLOW_PORT}"
+log " MinIO API:          http://minio.localhost:${MINIO_API_PORT}"
+log " MinIO Console:      http://minio.localhost:${MINIO_CONSOLE_PORT}"
 log " K8s Dashboard:      https://localhost:32443"
 log "--------------------------------------------------------"
 log "Credentials:"

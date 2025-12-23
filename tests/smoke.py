@@ -1,9 +1,11 @@
 """
-Простой смоук-тест платформы.
-По умолчанию вызывает start.bat, если не передан --skip-start.
+Lightweight smoke test for gitopslab.
+
+By default it runs start.bat; use --skip-start to only probe endpoints.
 """
 
 import argparse
+import json
 import os
 import ssl
 import subprocess
@@ -44,6 +46,19 @@ def http_check(url: str, timeout: float, allow_status: Tuple[int, ...]) -> int:
         raise
 
 
+def post_json(url: str, payload: Dict[str, object], timeout: float = 5.0) -> Tuple[int, bytes]:
+    ctx = ssl._create_unverified_context()
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.status, resp.read()
+
+
 def wait_http(name: str, url: str, allow_status: Tuple[int, ...] = (200,), attempts: int = 40, delay: float = 3.0):
     for i in range(1, attempts + 1):
         try:
@@ -69,6 +84,30 @@ def wait_http_any(name: str, urls: Tuple[str, ...], allow_status: Tuple[int, ...
         raise last_exc
 
 
+def predict_check(url: str):
+    payload = {"features": [5.1, 3.5, 1.4, 0.2]}
+    status, body = post_json(url, payload)
+    if status != 200:
+        raise RuntimeError(f"predict failed: status {status}")
+    data = json.loads(body.decode("utf-8"))
+    if "class_id" not in data or "class_name" not in data:
+        raise RuntimeError(f"predict response missing fields: {data}")
+    print(f"[ok] Predict -> {url} (class {data['class_id']}: {data['class_name']})")
+
+
+def predict_any(name: str, urls: Tuple[str, ...]):
+    last_exc = None
+    for u in dict.fromkeys(urls):
+        try:
+            predict_check(u)
+            return
+        except Exception as exc:  # noqa: BLE001
+            print(f"[wait] {name} ({u}) not ready ({exc})")
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+
+
 def ensure_started(skip_start: bool):
     if skip_start:
         return
@@ -80,9 +119,11 @@ def ensure_started(skip_start: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Smoke-тест gitopslab")
-    parser.add_argument("--skip-start", action="store_true", help="Не запускать start.bat перед проверкой")
-    parser.add_argument("--timeout", type=int, default=240, help="Глобальный таймаут, сек")
+    parser = argparse.ArgumentParser(description="Smoke test for gitopslab")
+    parser.add_argument("--skip-start", action="store_true", help="Do not run start.bat")
+    parser.add_argument("--timeout", type=int, default=240, help="Global timeout in seconds")
+    parser.add_argument("--skip-minio", action="store_true", help="Skip MinIO checks")
+    parser.add_argument("--skip-mlflow", action="store_true", help="Skip MLflow checks")
     args = parser.parse_args()
 
     ensure_started(args.skip_start)
@@ -94,16 +135,23 @@ def main():
     reg_port = env.get("REGISTRY_HTTP_PORT", "5001")
     argocd_port = env.get("ARGOCD_PORT", "8081")
     k3d_api = env.get("K3D_API_PORT", "6550")
+    minio_api_port = env.get("MINIO_API_PORT", "9090")
+    minio_console_port = env.get("MINIO_CONSOLE_PORT", "9091")
+    mlflow_port = env.get("MLFLOW_PORT", "8090")
 
     gitea_http = env.get("GITEA_PUBLIC_URL", f"http://localhost:{gitea_port}")
     wood_http = env.get("WOODPECKER_HOST", f"http://localhost:{wood_port}")
     argocd_http = env.get("ARGOCD_PUBLIC_URL", f"http://localhost:{argocd_port}")
     demo_http = env.get("DEMO_PUBLIC_URL", "http://demo.localhost:8088")
+    minio_http = env.get("MINIO_PUBLIC_URL", f"http://minio.localhost:{minio_api_port}")
+    mlflow_http = env.get("MLFLOW_PUBLIC_URL", f"http://mlflow.localhost:{mlflow_port}")
 
     gitea_candidates = (gitea_http, f"http://localhost:{gitea_port}")
     wood_candidates = (wood_http, f"http://localhost:{wood_port}")
     argocd_candidates = (argocd_http, f"http://localhost:{argocd_port}")
     demo_candidates = (demo_http, "http://localhost:8088")
+    minio_candidates = (minio_http, f"http://localhost:{minio_api_port}")
+    mlflow_candidates = (mlflow_http, f"http://localhost:{mlflow_port}")
 
     deadline = time.time() + args.timeout
 
@@ -127,8 +175,23 @@ def main():
     wait_remaining()
     wait_http("K8s API", f"https://localhost:{k3d_api}/version", allow_status=(200, 401))
 
+    if not args.skip_minio:
+        wait_remaining()
+        wait_http_any("MinIO", tuple(f"{u}/minio/health/ready" for u in minio_candidates), allow_status=(200,))
+
+    if not args.skip_mlflow:
+        wait_remaining()
+        wait_http_any(
+            "MLflow",
+            tuple(f"{u}/api/2.0/mlflow/experiments/list" for u in mlflow_candidates),
+            allow_status=(200,),
+        )
+
     wait_remaining()
     wait_http_any("Demo app", tuple(f"{u}/" for u in demo_candidates), allow_status=(200,))
+
+    wait_remaining()
+    predict_any("Predict", tuple(f"{u}/predict" for u in demo_candidates))
 
     print("-------------------------------------------------------")
     print("All endpoints are reachable:")
@@ -138,6 +201,11 @@ def main():
     print(f"Registry:    http://localhost:{reg_port}/v2/")
     print(f"Argo CD:     {argocd_http}")
     print(f"K8s API:     https://localhost:{k3d_api}")
+    if not args.skip_minio:
+        print(f"MinIO API:   {minio_candidates[0]}")
+        print(f"MinIO UI:    http://minio.localhost:{minio_console_port}")
+    if not args.skip_mlflow:
+        print(f"MLflow:      {mlflow_candidates[0]}")
     print(f"Demo app:    {demo_http}")
     print("-------------------------------------------------------")
 

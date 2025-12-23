@@ -24,7 +24,7 @@ if !errorlevel! neq 0 (
     echo [Start] ssh-keygen not found in PATH. Adding common locations...
     set "PATH=C:\Windows\System32\OpenSSH;!PATH!"
     set "PATH=C:\Program Files\Git\usr\bin;!PATH!"
-    set "PATH=C:\Program Files (x86)\Git\usr\bin;!PATH!"
+    set "PATH=C:\Program Files ^(x86^)\Git\usr\bin;!PATH!"
 )
 where ssh-keygen >nul 2>nul
 if !errorlevel! neq 0 (
@@ -32,19 +32,6 @@ if !errorlevel! neq 0 (
     pause
     exit /b 1
 )
-
-REM Ensure local Docker CLI (used to talk to Podman Docker API)
-set "DOCKER_CLI_DIR=%CD%\docker-cli\docker"
-if not exist "%DOCKER_CLI_DIR%\docker.exe" (
-    echo [Start] Docker CLI not found. Downloading...
-    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $url='https://download.docker.com/win/static/stable/x86_64/docker-27.3.1.zip'; $zip='docker-cli.zip'; Invoke-WebRequest -Uri $url -OutFile $zip; Expand-Archive -Path $zip -DestinationPath 'docker-cli' -Force"
-    if not exist "%DOCKER_CLI_DIR%\docker.exe" (
-        echo [Error] Failed to download Docker CLI.
-        pause
-        exit /b 1
-    )
-)
-set "PATH=%DOCKER_CLI_DIR%;%PATH%"
 
 echo [Start] Detecting container runtime...
 
@@ -78,13 +65,58 @@ if !errorlevel! equ 0 (
         "%SystemRoot%\System32\timeout.exe" /t 10 /nobreak >nul
     )
 
-    REM Prefer native podman compose to avoid docker-py issues
-    set "COMPOSE_CMD=podman compose"
-    REM Ensure we are not leaking docker-specific DOCKER_HOST when using podman
+    REM Prefer podman-compose; podman compose falls back to docker-compose and breaks on Windows here
+    set "COMPOSE_BIN="
+    set "COMPOSE_ARGS="
+    set "COMPOSE_LABEL="
+    podman-compose --version >nul 2>nul
+    if !errorlevel! equ 0 (
+        set "COMPOSE_BIN=podman-compose"
+        set "COMPOSE_LABEL=podman-compose"
+    ) else (
+        set "PY_LAUNCHER="
+        for /f "usebackq delims=" %%P in (`where py 2^>nul`) do (
+            if "!PY_LAUNCHER!"=="" set "PY_LAUNCHER=%%P"
+        )
+        if "!PY_LAUNCHER!"=="" (
+            echo [Error] Python launcher py.exe not found. Required for podman-compose.
+            pause
+            exit /b 1
+        )
+        set "PY_VERSION="
+        for %%V in (3.12 3.11) do (
+            if "!PY_VERSION!"=="" (
+                "!PY_LAUNCHER!" -%%V -c "import sys" >nul 2>nul
+                if !errorlevel! equ 0 set "PY_VERSION=%%V"
+            )
+        )
+        if "!PY_VERSION!"=="" (
+            echo [Error] Python 3.11+ not found. Install Python 3.11 or 3.12 for podman-compose.
+            pause
+            exit /b 1
+        )
+        "!PY_LAUNCHER!" -!PY_VERSION! -m pip --version >nul 2>nul
+        if !errorlevel! neq 0 (
+            "!PY_LAUNCHER!" -!PY_VERSION! -m ensurepip --upgrade >nul 2>nul
+        )
+        "!PY_LAUNCHER!" -!PY_VERSION! -m pip show podman-compose >nul 2>nul
+        if !errorlevel! neq 0 (
+            echo [Start] Installing podman-compose for Python !PY_VERSION!...
+            "!PY_LAUNCHER!" -!PY_VERSION! -m pip install --user podman-compose
+            if !errorlevel! neq 0 (
+                echo [Error] Failed to install podman-compose for Python !PY_VERSION!.
+                pause
+                exit /b 1
+            )
+        )
+        set "COMPOSE_BIN=!PY_LAUNCHER!"
+        set "COMPOSE_ARGS=-!PY_VERSION! -m podman_compose"
+        set "COMPOSE_LABEL=podman-compose py !PY_VERSION!"
+    )
     set "DOCKER_HOST="
     set "CONTAINER_HOST="
     set "PODMAN_HOST="
-    echo [Start] Using !COMPOSE_CMD!
+    echo [Start] Using !COMPOSE_LABEL!
     goto :run
 )
 
@@ -93,7 +125,7 @@ where docker >nul 2>nul
 if !errorlevel! equ 0 (
     echo [Start] Docker found.
     set "COMPOSE_CMD=docker compose"
-    REM If Podman socket exists, point docker client to it (optional)
+    REM If Podman socket exists, point docker client to it as an optional fallback
     if exist "\\\\.\\pipe\\podman-machine-default" (
         set "DOCKER_HOST=npipe:////./pipe/podman-machine-default"
     )
@@ -105,8 +137,13 @@ pause
 exit /b 1
 
 :run
-echo [Start] Starting services with !COMPOSE_CMD!...
-!COMPOSE_CMD! up -d
+if not "%COMPOSE_BIN%"=="" (
+    echo [Start] Starting services with !COMPOSE_BIN! !COMPOSE_ARGS!...
+    "!COMPOSE_BIN!" !COMPOSE_ARGS! up -d --remove-orphans --force-recreate
+) else (
+    echo [Start] Starting services with !COMPOSE_CMD!...
+    !COMPOSE_CMD! up -d
+)
 if !errorlevel! neq 0 (
     echo [Error] Failed to start services.
     pause
@@ -145,9 +182,14 @@ echo Gitea SSH:   ssh://git@localhost:%GITEA_SSH_PORT%
 echo Woodpecker:  http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
 echo Registry:    http://registry.localhost:%REGISTRY_HTTP_PORT%/v2/
 echo Argo CD:     http://argocd.localhost:%ARGOCD_PORT%
+echo MLflow:      http://mlflow.localhost:%MLFLOW_PORT%
+echo MinIO API:   http://minio.localhost:%MINIO_API_PORT%
+echo MinIO UI:    http://minio.localhost:%MINIO_CONSOLE_PORT%
 echo Ingress/LB:  http://localhost:8080
 echo K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
 echo Demo App:    http://demo.localhost:8088
+echo ML Predict:  http://demo.localhost:8088/predict
 echo K8s Dashboard: https://dashboard.localhost:32443
 echo --------------------------------------------------------
-"%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul
+"%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul 2>&1
+exit /b 0

@@ -13,4 +13,14 @@ def test_healthz():
 
 
 def test_version():
-    assert client.get("/version").json() == {"version": VERSION}
+    body = client.get("/version").json()
+    assert body["version"] == VERSION
+    assert "model_sha" in body
+
+
+def test_predict_setosa():
+    resp = client.post("/predict", json={"features": [5.1, 3.5, 1.4, 0.2]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["class_id"] == 0
+    assert body["class_name"].lower().startswith("setosa")

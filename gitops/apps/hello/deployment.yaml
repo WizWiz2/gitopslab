@@ -14,22 +14,73 @@ spec:
       labels:
         app: hello-api
     spec:
+      initContainers:
+        - name: model-loader
+          image: minio/mc:latest
+          env:
+            - name: MINIO_ENDPOINT
+              value: http://minio:9000
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
+            - name: MODEL_OBJECT
+              valueFrom:
+                configMapKeyRef:
+                  name: hello-api-model
+                  key: MODEL_OBJECT
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "[model] waiting for minio..."
+              until mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo "[model] minio not ready, retrying..."
+                sleep 2
+              done
+              echo "[model] fetching model $MODEL_OBJECT"
+              until mc cp "minio/$MODEL_OBJECT" /models/model.joblib; do
+                echo "[model] model not ready, retrying..."
+                sleep 2
+              done
+              mc stat "minio/$MODEL_OBJECT"
+          volumeMounts:
+            - name: models
+              mountPath: /models
       containers:
         - name: hello-api
-          image: nginxdemos/hello:plain-text
+          image: registry.localhost:5002/hello-api:dev
           imagePullPolicy: IfNotPresent
+          env:
+            - name: MODEL_PATH
+              value: /models/model.joblib
+            - name: MODEL_SHA
+              valueFrom:
+                configMapKeyRef:
+                  name: hello-api-model
+                  key: MODEL_SHA
           ports:
-            - containerPort: 80
+            - containerPort: 8000
+          volumeMounts:
+            - name: models
+              mountPath: /models
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 20
           resources:
@@ -39,3 +90,6 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
+      volumes:
+        - name: models
+          emptyDir: {}

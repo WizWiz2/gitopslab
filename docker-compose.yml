@@ -23,6 +23,8 @@ services:
       - "woodpecker.localhost:10.88.0.1"
       - "argocd.localhost:10.88.0.1"
       - "demo.localhost:10.88.0.1"
+      - "minio.localhost:10.88.0.1"
+      - "mlflow.localhost:10.88.0.1"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
       interval: 20s
@@ -68,6 +70,8 @@ services:
       - "woodpecker.localhost:10.88.0.1"
       - "argocd.localhost:10.88.0.1"
       - "demo.localhost:10.88.0.1"
+      - "minio.localhost:10.88.0.1"
+      - "mlflow.localhost:10.88.0.1"
     volumes:
       - woodpecker-data:/var/lib/woodpecker
 
@@ -90,6 +94,8 @@ services:
       - "woodpecker.localhost:10.88.0.1"
       - "argocd.localhost:10.88.0.1"
       - "demo.localhost:10.88.0.1"
+      - "minio.localhost:10.88.0.1"
+      - "mlflow.localhost:10.88.0.1"
 
   bootstrap:
     build:
@@ -118,6 +124,7 @@ volumes:
   woodpecker-data:
 
 networks:
+  default: {}
   podman:
     external: true
     name: podman
