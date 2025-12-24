@@ -13,14 +13,18 @@ docker compose up -d
 Just run `start.bat`. It will create the configuration file, download a local Docker CLI (if missing), and start the containers using Docker or Podman automatically. The `bootstrap` container provisions k3d, installs Argo CD, and applies the GitOps root application automatically.
 
 ### URLs
-- Gitea: http://gitea.localhost:3000 (SSH: 2222)
+- Gitea: http://gitea.localhost:3000 (SSH: ssh://git@gitea.localhost:2222)
 - Registry: http://registry.localhost:5001/v2/ (in-cluster mirror: k3d-registry.localhost:5002)
 - Woodpecker: http://woodpecker.localhost:8000
 - Argo CD: http://argocd.localhost:8081
-- Ingress/LB: http://localhost:8080
+- MLflow: http://mlflow.localhost:8090
+- MinIO API: http://minio.localhost:9090
+- MinIO UI: http://minio.localhost:9091
+- Ingress/LB: http://apps.localhost:8080
 - K8s Dashboard: https://dashboard.localhost:32443 (token выводится в dashboard-token.txt после `start.bat`)
 - K8s API: https://k8s.localhost:6550 (k3d gitopslab) — 401 в браузере нормально, используйте kubeconfig/token
 - Demo app: http://demo.localhost:8088
+- ML Predict: http://demo.localhost:8088/predict
 
 ### Reset
 
@@ -43,7 +47,11 @@ This project can be run with Podman.
      ```bash
      export DOCKER_SOCKET=/run/user/$(id -u)/podman/podman.sock
      ```
-   - **Windows**: Map the listener pipe or socket. If you are using Podman Desktop, it handles this. Ensure `DOCKER_SOCKET` points to the valid pipe/socket if the default `/var/run/docker.sock` isn't magically handled by your setup (e.g. via WSL link).
+   - **Windows**: When using podman-compose, disable path conversion and keep the socket as a linux path:
+     ```bash
+     set COMPOSE_CONVERT_WINDOWS_PATHS=0
+     set DOCKER_SOCKET=/run/podman/podman.sock
+     ```
    
 3. **Run**:
    ```bash

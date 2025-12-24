@@ -11,6 +11,7 @@ log() { echo "[bootstrap] $*"; }
 : "${MLFLOW_PORT:=8090}"
 : "${MINIO_API_PORT:=9090}"
 : "${MINIO_CONSOLE_PORT:=9091}"
+: "${MLFLOW_IMAGE:=registry.localhost:5002/mlflow:lite}"
 
 if ! command -v k3d >/dev/null 2>&1; then
   log "k3d not available; container build is expected to install it"
@@ -20,19 +21,54 @@ fi
 create_registry() {
   if k3d registry list | grep -q "${K3D_REGISTRY_NAME}"; then
     log "registry ${K3D_REGISTRY_NAME} already exists"
+    docker start "k3d-${K3D_REGISTRY_NAME}" >/dev/null 2>&1 || true
     return
   fi
   log "creating k3d registry ${K3D_REGISTRY_NAME}"
   k3d registry create ${K3D_REGISTRY_NAME} --port ${K3D_REGISTRY_PORT} --default-network "${K3D_NETWORK:-bridge}"
 }
 
+build_mlflow_image() {
+  if [ ! -d /workspace/mlflow ]; then
+    log "mlflow build context not found; skipping image build"
+    return
+  fi
+  if docker image inspect "${MLFLOW_IMAGE}" >/dev/null 2>&1; then
+    log "mlflow image already built (${MLFLOW_IMAGE})"
+  else
+    log "building mlflow image ${MLFLOW_IMAGE}"
+    docker build -t "${MLFLOW_IMAGE}" /workspace/mlflow
+  fi
+  docker push "${MLFLOW_IMAGE}"
+}
+
 create_cluster() {
   if k3d cluster list | grep -q "${K3D_CLUSTER_NAME}"; then
     log "cluster ${K3D_CLUSTER_NAME} already exists"
-    return
+    local lb="k3d-${K3D_CLUSTER_NAME}-serverlb"
+    local needs_recreate="false"
+    if ! docker port "$lb" 30900/tcp >/dev/null 2>&1; then
+      needs_recreate="true"
+    fi
+    if ! docker port "$lb" 30901/tcp >/dev/null 2>&1; then
+      needs_recreate="true"
+    fi
+    if ! docker port "$lb" 30902/tcp >/dev/null 2>&1; then
+      needs_recreate="true"
+    fi
+    if [ "$needs_recreate" = "true" ]; then
+      log "loadbalancer is missing ML ports; recreating cluster"
+      k3d cluster delete ${K3D_CLUSTER_NAME} >/dev/null 2>&1 || true
+    else
+      k3d node list --no-headers | awk -v prefix="k3d-${K3D_CLUSTER_NAME}-" '$1 ~ "^"prefix {print $1}' | while read -r node; do
+        [ -n "$node" ] && docker start "$node" >/dev/null 2>&1 || true
+      done
+      docker start "$lb" >/dev/null 2>&1 || true
+      return
+    fi
   fi
   log "creating k3d cluster ${K3D_CLUSTER_NAME}"
-  k3d cluster create ${K3D_CLUSTER_NAME} \
+  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false \
     --api-port ${K3D_API_PORT} \
     --servers 1 --agents 1 \
     --port "8080:80@loadbalancer" \
@@ -55,60 +91,60 @@ ensure_loadbalancer_config() {
     return
   fi
 
-  if docker exec "$lb" test -s /etc/confd/values.yaml >/dev/null 2>&1; then
-    log "loadbalancer config already in place"
-  else
-    log "generating loadbalancer config for ${lb}"
-    local tmpfile
-    tmpfile="$(mktemp)"
-    local get_ips_cmd='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
-    add_nodes() {
-      local role_filter="$1"
-      k3d node list --no-headers | awk -v role="$role_filter" '
-        role == "server" && $2 == "server" {print $1}
-        role == "all" && ($2 == "server" || $2 == "agent") {print $1}
-      ' | while read -r node; do
-        ip=$(docker inspect -f "${get_ips_cmd}" "$node" 2>/dev/null || true)
-        [ -n "$ip" ] && printf "    - %s\n" "$ip"
-      done
-    }
-    {
-      echo "ports:"
-      echo "  6443.tcp:"
-      add_nodes "server"
-      echo "  80.tcp:"
-      add_nodes "all"
-      echo "  30081.tcp:"
-      add_nodes "server"
-      echo "  30888.tcp:"
-      add_nodes "server"
-      echo "  30902.tcp:"
-      add_nodes "server"
-      echo "  30900.tcp:"
-      add_nodes "server"
-      echo "  30901.tcp:"
-      add_nodes "server"
-      echo "  32443.tcp:"
-      add_nodes "server"
-      echo "settings:"
-      echo "  workerConnections: 1024"
-    } >"$tmpfile"
+  log "generating loadbalancer config for ${lb}"
+  local tmpfile
+  tmpfile="$(mktemp)"
+  local get_ips_cmd='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+  add_nodes() {
+    local role_filter="$1"
+    k3d node list --no-headers | awk -v role="$role_filter" '
+      role == "server" && $2 == "server" {print $1}
+      role == "all" && ($2 == "server" || $2 == "agent") {print $1}
+    ' | while read -r node; do
+      ip=$(docker inspect -f "${get_ips_cmd}" "$node" 2>/dev/null || true)
+      [ -n "$ip" ] && printf "    - %s\n" "$ip"
+    done
+  }
+  {
+    echo "ports:"
+    echo "  6443.tcp:"
+    add_nodes "server"
+    echo "  80.tcp:"
+    add_nodes "all"
+    echo "  30081.tcp:"
+    add_nodes "server"
+    echo "  30888.tcp:"
+    add_nodes "server"
+    echo "  30902.tcp:"
+    add_nodes "server"
+    echo "  30900.tcp:"
+    add_nodes "server"
+    echo "  30901.tcp:"
+    add_nodes "server"
+    echo "  32443.tcp:"
+    add_nodes "server"
+    echo "settings:"
+    echo "  workerConnections: 1024"
+  } >"$tmpfile"
 
-    docker cp "$tmpfile" "${lb}:/etc/confd/values.yaml"
-    rm -f "$tmpfile"
-  fi
+  docker cp "$tmpfile" "${lb}:/etc/confd/values.yaml"
+  rm -f "$tmpfile"
 
   docker start "$lb" >/dev/null 2>&1 || true
 }
 
 patch_registry_hosts() {
   local host_ip
-  host_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-serverlb" 2>/dev/null || true)
+  host_ip=$(docker network inspect "${K3D_NETWORK:-podman}" -f "{{range .IPAM.Config}}{{.Gateway}}{{end}}" 2>/dev/null || true)
+  if [ -z "$host_ip" ]; then
+    host_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-serverlb" 2>/dev/null || true)
+  fi
   if [ -z "$host_ip" ]; then
     host_ip="10.88.0.1"
   fi
   k3d node list --no-headers | awk '{print $1}' | while read -r node; do
-    docker exec "$node" sh -c "grep -q 'registry.localhost' /etc/hosts || echo \"$host_ip registry.localhost\" >> /etc/hosts"
+    [ -z "$node" ] && continue
+    docker exec "$node" sh -c "grep -v 'registry.localhost' /etc/hosts > /tmp/hosts && echo \"${host_ip} registry.localhost\" >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
   done
 }
 
@@ -119,15 +155,16 @@ ensure_kubeconfig() {
     log "fetching kubeconfig for ${K3D_CLUSTER_NAME}"
     k3d kubeconfig get ${K3D_CLUSTER_NAME} > "$KUBECONFIG"
   fi
-  # k3d иногда кладет 0.0.0.0/localhost в адрес API - переведем на 127.0.0.1, чтобы не было попыток уйти на IPv6
+  # Normalize kubeconfig API host to 127.0.0.1 to avoid IPv6 fallbacks.
   sed -i "s|https://0.0.0.0:${K3D_API_PORT}|https://127.0.0.1:${K3D_API_PORT}|g" "$KUBECONFIG"
   sed -i "s|https://localhost:${K3D_API_PORT}|https://127.0.0.1:${K3D_API_PORT}|g" "$KUBECONFIG"
 
-  # Для внутреннего доступа из bootstrap-контейнера удобнее ходить прямо в сервер по его IP/6443 (есть в сертификате)
+  # For bootstrap access, use the server IP:6443 (covered by the cert SANs).
   local server_ip
   server_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-server-0" 2>/dev/null || true)
   if [ -n "$server_ip" ]; then
     sed -i "s|https://127.0.0.1:${K3D_API_PORT}|https://${server_ip}:6443|g" "$KUBECONFIG"
+    sed -i "s|https://10.88.0.1:${K3D_API_PORT}|https://${server_ip}:6443|g" "$KUBECONFIG"
   fi
 }
 
@@ -162,6 +199,7 @@ apply_root_app() {
 
 bootstrap() {
   create_registry
+  build_mlflow_image
   create_cluster
   ensure_loadbalancer_config
   patch_registry_hosts
@@ -193,16 +231,21 @@ bootstrap
 log "bootstrap completed"
 
 log "--------------------------------------------------------"
-log "DASHBOARD URLs (Host):"
-log " Gitea:              http://gitea.localhost:3000"
-log " Woodpecker:         http://woodpecker.localhost:8000"
-log " Argo CD:            http://argocd.localhost:8081"
-log " Ingress/LB (apps):  http://localhost:8080"
-log " Demo App:           http://demo.localhost:8088"
-log " MLflow:             http://mlflow.localhost:${MLFLOW_PORT}"
-log " MinIO API:          http://minio.localhost:${MINIO_API_PORT}"
-log " MinIO Console:      http://minio.localhost:${MINIO_CONSOLE_PORT}"
-log " K8s Dashboard:      https://localhost:32443"
+log "STACK URLs (Host):"
+log " GitOps Stack:"
+log "  Gitea:             http://gitea.localhost:3000"
+log "  Woodpecker:        http://woodpecker.localhost:8000"
+log "  Argo CD:           http://argocd.localhost:8081"
+log "  Registry:          http://registry.localhost:5001/v2/"
+log " MLOps Stack:"
+log "  MLflow:            http://mlflow.localhost:${MLFLOW_PORT}"
+log "  MinIO API:         http://minio.localhost:${MINIO_API_PORT}"
+log "  MinIO Console:     http://minio.localhost:${MINIO_CONSOLE_PORT}"
+log "  Demo App:          http://demo.localhost:8088"
+log "  ML Predict:        http://demo.localhost:8088/predict"
+log " Platform:"
+log "  Ingress/LB (apps): http://apps.localhost:8080"
+log "  K8s Dashboard:     https://dashboard.localhost:32443"
 log "--------------------------------------------------------"
 log "Credentials:"
 log " User:       ${GITEA_ADMIN_USER:-gitops}"

@@ -87,6 +87,7 @@ services:
       - WOODPECKER_SERVER=woodpecker-server:9000
       - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
       - WOODPECKER_BACKEND=docker
+      - DOCKER_HOST=${DOCKER_HOST}
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     extra_hosts:
@@ -111,9 +112,13 @@ services:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - ./gitops:/workspace/gitops
       - ./scripts:/workspace/scripts:ro
+      - ./mlflow:/workspace/mlflow:ro
     environment:
       - BOOTSTRAP_TRACE=true
+      - DOCKER_HOST=${DOCKER_HOST}
     entrypoint: ["/workspace/scripts/bootstrap.sh"]
+    extra_hosts:
+      - "registry.localhost:10.88.0.1"
     networks:
       - default
       - podman

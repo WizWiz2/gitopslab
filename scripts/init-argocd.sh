@@ -12,8 +12,15 @@ log "Waiting for Argo CD pods..."
 kubectl wait --for=condition=Ready pods --all -n argocd --timeout=300s
 
 # Экспонируем argocd-server наружу через k3d servicelb
-log "Patching Argo CD service to NodePort (30081)..."
-kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"NodePort","ports":[{"name":"https","port":443,"targetPort":8080,"nodePort":30081}]}}' >/dev/null
+current_nodeport="$(kubectl get svc argocd-server -n argocd -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}' 2>/dev/null || true)"
+if [ "$current_nodeport" = "30081" ]; then
+  log "Argo CD service already uses NodePort 30081"
+else
+  log "Patching Argo CD service to NodePort (30081)..."
+  if ! kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"NodePort","ports":[{"name":"https","port":443,"targetPort":8080,"nodePort":30081}]}}' >/dev/null 2>&1; then
+    log "NodePort patch failed; keeping existing service settings."
+  fi
+fi
 
 # Get Gitea Token
 if [ -f /workspace/.gitea_token ]; then

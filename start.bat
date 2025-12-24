@@ -32,6 +32,12 @@ if !errorlevel! neq 0 (
     pause
     exit /b 1
 )
+where ssh >nul 2>nul
+if !errorlevel! neq 0 (
+    echo [Error] ssh not found. Please install OpenSSH or Git for Windows.
+    pause
+    exit /b 1
+)
 
 echo [Start] Detecting container runtime...
 
@@ -63,6 +69,21 @@ if !errorlevel! equ 0 (
         )
          REM Wait a bit for the socket to be ready
         "%SystemRoot%\System32\timeout.exe" /t 10 /nobreak >nul
+    )
+
+    if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.88.0.1"
+    set "PODMAN_SERVICE_PORT=2375"
+    set "DOCKER_HOST=tcp://!PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT!"
+    echo [Start] Configuring Podman VM registry access...
+    podman machine ssh -- "grep -q 'registry.localhost' /etc/hosts || echo '127.0.0.1 registry.localhost' >> /etc/hosts"
+    podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' >> /etc/containers/registries.conf"
+    podman machine ssh -- "pkill -f 'podman system service' || true"
+    echo [Start] Ensuring Podman API service on !PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT! ...
+    podman machine ssh -- "nohup podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1 &"
+    if !errorlevel! neq 0 (
+        echo [Error] Failed to start Podman API service inside the VM.
+        pause
+        exit /b 1
     )
 
     REM Prefer podman-compose; podman compose falls back to docker-compose and breaks on Windows here
@@ -113,9 +134,9 @@ if !errorlevel! equ 0 (
         set "COMPOSE_ARGS=-!PY_VERSION! -m podman_compose"
         set "COMPOSE_LABEL=podman-compose py !PY_VERSION!"
     )
-    set "DOCKER_HOST="
     set "CONTAINER_HOST="
     set "PODMAN_HOST="
+    set "COMPOSE_CONVERT_WINDOWS_PATHS=0"
     echo [Start] Using !COMPOSE_LABEL!
     goto :run
 )
@@ -177,19 +198,22 @@ if exist credentials.txt (
 
 echo [Start] Done! You can now access the dashboards.
 echo --------------------------------------------------------
-echo Gitea:       http://gitea.localhost:%GITEA_HTTP_PORT%
-echo Gitea SSH:   ssh://git@localhost:%GITEA_SSH_PORT%
-echo Woodpecker:  http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
-echo Registry:    http://registry.localhost:%REGISTRY_HTTP_PORT%/v2/
-echo Argo CD:     http://argocd.localhost:%ARGOCD_PORT%
-echo MLflow:      http://mlflow.localhost:%MLFLOW_PORT%
-echo MinIO API:   http://minio.localhost:%MINIO_API_PORT%
-echo MinIO UI:    http://minio.localhost:%MINIO_CONSOLE_PORT%
-echo Ingress/LB:  http://localhost:8080
-echo K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
-echo Demo App:    http://demo.localhost:8088
-echo ML Predict:  http://demo.localhost:8088/predict
-echo K8s Dashboard: https://dashboard.localhost:32443
+echo GitOps Stack:
+echo   Gitea:       http://gitea.localhost:%GITEA_HTTP_PORT%
+echo   Gitea SSH:   ssh://git@gitea.localhost:%GITEA_SSH_PORT%
+echo   Woodpecker:  http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
+echo   Registry:    http://registry.localhost:%REGISTRY_HTTP_PORT%/v2/
+echo   Argo CD:     http://argocd.localhost:%ARGOCD_PORT%
+echo MLOps Stack:
+echo   MLflow:      http://mlflow.localhost:%MLFLOW_PORT%
+echo   MinIO API:   http://minio.localhost:%MINIO_API_PORT%
+echo   MinIO UI:    http://minio.localhost:%MINIO_CONSOLE_PORT%
+echo   Demo App:    http://demo.localhost:8088
+echo   ML Predict:  http://demo.localhost:8088/predict
+echo Platform:
+echo   Ingress/LB:  http://apps.localhost:8080
+echo   K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
+echo   K8s Dashboard: https://dashboard.localhost:32443
 echo --------------------------------------------------------
 "%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul 2>&1
 exit /b 0

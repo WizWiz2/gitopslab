@@ -17,6 +17,7 @@ if !errorlevel! equ 0 (
     if !errorlevel! equ 0 (
         set "COMPOSE_BIN=podman-compose"
         set "COMPOSE_LABEL=podman-compose"
+        set "COMPOSE_CONVERT_WINDOWS_PATHS=0"
     ) else (
         set "PY_LAUNCHER="
         for /f "usebackq delims=" %%P in (`where py 2^>nul`) do (
@@ -49,6 +50,7 @@ if !errorlevel! equ 0 (
                     set "COMPOSE_BIN=!PY_LAUNCHER!"
                     set "COMPOSE_ARGS=-!PY_VERSION! -m podman_compose"
                     set "COMPOSE_LABEL=podman-compose py !PY_VERSION!"
+                    set "COMPOSE_CONVERT_WINDOWS_PATHS=0"
                 )
             )
         )

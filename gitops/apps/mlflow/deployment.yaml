@@ -16,7 +16,10 @@ spec:
     spec:
       containers:
         - name: mlflow
-          image: ghcr.io/mlflow/mlflow:v2.11.3
+          image: registry.localhost:5002/mlflow:lite
+          imagePullPolicy: Always
+          command:
+            - mlflow
           args:
             - server
             - --backend-store-uri

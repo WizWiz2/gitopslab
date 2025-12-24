@@ -61,11 +61,33 @@ function Resolve-Url {
 }
 
 function Rewrite-UrlHost {
-    param([string]$url, [string]$host)
+    param([string]$url, [string]$targetHost)
     $uri = [Uri]$url
     $builder = New-Object UriBuilder $uri
-    $builder.Host = $host
+    $builder.Host = $targetHost
     return $builder.Uri.AbsoluteUri.TrimEnd("/")
+}
+
+function Wait-For-Http {
+    param(
+        [string]$name,
+        [scriptblock]$check,
+        [int]$timeoutSec = 60,
+        [int]$intervalSec = 2
+    )
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    while ($true) {
+        try {
+            & $check
+            return
+        } catch {
+            if ((Get-Date) -gt $deadline) {
+                throw "$name not ready after ${timeoutSec}s: $($_.Exception.Message)"
+            }
+            Write-Host "[e2e] $name not ready yet, retrying..."
+            Start-Sleep -Seconds $intervalSec
+        }
+    }
 }
 
 # Fallback in case gitea.localhost is not resolvable
@@ -80,13 +102,24 @@ try {
 
 $minioUrl = Resolve-Url -url $minioUrl -fallbackHost "localhost"
 $mlflowUrl = Resolve-Url -url $mlflowUrl -fallbackHost "localhost"
-$minioContainerUrl = Rewrite-UrlHost -url $minioUrl -host $podmanGateway
-$mlflowContainerUrl = Rewrite-UrlHost -url $mlflowUrl -host $podmanGateway
+$minioContainerUrl = Rewrite-UrlHost -url $minioUrl -targetHost $podmanGateway
+$mlflowContainerUrl = Rewrite-UrlHost -url $mlflowUrl -targetHost $podmanGateway
 
 Write-Host "[e2e] Checking MinIO at $minioUrl ..."
-Invoke-WebRequest -Uri "$minioUrl/minio/health/ready" -UseBasicParsing -ErrorAction Stop | Out-Null
+Wait-For-Http -name "MinIO" -timeoutSec 120 -check {
+    Invoke-WebRequest -Uri "$minioUrl/minio/health/ready" -UseBasicParsing -ErrorAction Stop | Out-Null
+}
+Write-Host "[e2e] Waiting for MLflow deployment rollout ..."
+try {
+    podman exec platform-bootstrap kubectl -n apps rollout status deploy/mlflow --timeout=300s | Out-Null
+} catch {
+    throw "MLflow deployment not ready: $($_.Exception.Message)"
+}
 Write-Host "[e2e] Checking MLflow at $mlflowUrl ..."
-Invoke-RestMethod -Method Get -Uri "$mlflowUrl/api/2.0/mlflow/experiments/list" -ErrorAction Stop | Out-Null
+$mlflowHealthBody = @{ max_results = 1 } | ConvertTo-Json
+Wait-For-Http -name "MLflow" -timeoutSec 180 -check {
+    Invoke-RestMethod -Method Post -Uri "$mlflowUrl/api/2.0/mlflow/experiments/search" -ContentType "application/json" -Body $mlflowHealthBody -ErrorAction Stop | Out-Null
+}
 
 $contentPath = "hello-api/e2e-marker.txt"
 $marker = [Guid]::NewGuid().ToString("N")
@@ -148,8 +181,9 @@ New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 $modelObject = "ml-models/iris-$commitSha.joblib"
 
 Write-Host "[e2e] Training model and logging to MLflow ($mlflowUrl) ..."
+$trainImage = $envVars["ML_TRAIN_IMAGE"]
+if (-not $trainImage) { $trainImage = "registry.localhost:5002/mlflow:lite" }
 $trainCmd = @(
-    "pip install --no-cache-dir -r ml/requirements.txt"
     "python ml/train.py --output ml/artifacts/model.joblib --commit $commitSha --model-object $modelObject --model-sha-path ml/artifacts/model.sha --experiment $mlflowExperiment"
 ) -join " && "
 podman run --rm --network podman `
@@ -158,7 +192,8 @@ podman run --rm --network podman `
     -e "MLFLOW_EXPERIMENT_NAME=$mlflowExperiment" `
     -v "$((Join-Path $repoRoot "..")):/workspace" `
     -w /workspace `
-    python:3.10-slim sh -c $trainCmd | Out-Null
+    $trainImage sh -c $trainCmd | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Training failed with exit code $LASTEXITCODE" }
 
 $modelShaPath = Join-Path $artifactDir "model.sha"
 if (-not (Test-Path $modelShaPath)) { throw "Model sha not found at $modelShaPath" }
@@ -174,7 +209,9 @@ $mcCmd = @(
 podman run --rm --network podman `
     --add-host "minio.localhost:$podmanGateway" `
     -v "$((Join-Path $repoRoot "..")):/workspace" `
-    minio/mc sh -c $mcCmd | Out-Null
+    --entrypoint /bin/sh `
+    minio/mc -c $mcCmd | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "MinIO upload failed with exit code $LASTEXITCODE" }
 
 $modelConfigPath = "gitops/apps/hello/model-configmap.yaml"
 $modelConfigUrl  = "$giteaUrl/api/v1/repos/$giteaUser/platform/contents/$modelConfigPath"
@@ -202,6 +239,9 @@ $searchBody = @{
     order_by = @("start_time DESC")
 } | ConvertTo-Json
 $runResp = Invoke-RestMethod -Method Post -Uri "$mlflowUrl/api/2.0/mlflow/runs/search" -ContentType "application/json" -Body $searchBody -ErrorAction Stop
+if (-not $runResp -or -not $runResp.PSObject.Properties["runs"]) {
+    throw "MLflow run search returned unexpected response"
+}
 if (-not $runResp.runs -or $runResp.runs.Count -eq 0) {
     throw "MLflow run not found for commit $commitSha"
 }
@@ -231,8 +271,26 @@ $gitopsUrl  = "$giteaUrl/api/v1/repos/$giteaUser/platform/contents/$gitopsPath"
 $deployContent = Invoke-RestMethod -Method Get -Uri $gitopsUrl -Headers $authHeader -ErrorAction Stop
 $deploySha = $deployContent.sha
 $currentYaml = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($deployContent.content))
-$updatedYaml = $currentYaml -replace "(?m)^\\s*image:\\s*.+$", "          image: $deployImageTag"
-$beforeLine = ($currentYaml -split "`n" | Where-Object { $_ -match "^\\s*image\\s*:" }) -join "; "
+$lines = $currentYaml -split "`n"
+$beforeLine = $null
+for ($i = 0; $i -lt $lines.Length; $i++) {
+    $line = $lines[$i].TrimEnd()
+    if ($line -match "^\s*-\s*name:\s*hello-api\s*$") {
+        for ($j = $i + 1; $j -lt $lines.Length; $j++) {
+            $nextLine = $lines[$j].TrimEnd()
+            if ($nextLine -match "^(\s*)image\s*:") {
+                $beforeLine = $nextLine.Trim()
+                $indent = $Matches[1]
+                $lines[$j] = "${indent}image: $deployImageTag"
+                break
+            }
+            if ($lines[$j] -match "^\s*-\s*name:") { break }
+        }
+        break
+    }
+}
+if (-not $beforeLine) { throw "hello-api image line not found in $gitopsPath" }
+$updatedYaml = $lines -join "`n"
 Write-Host "[e2e] Updating deployment image: $beforeLine -> image: $deployImageTag"
 $deployBody = @{
     message = "chore(e2e): bump hello-api image to $commitSha"
@@ -272,13 +330,13 @@ $applyModelCmd = ($kubectlBase + @(
 Write-Host "[e2e] Applying model config to cluster ..."
 podman run --rm --network podman `
     -e DOCKER_HOST=unix:///var/run/podman/podman.sock `
-    -v /var/run/podman/podman.sock:/var/run/podman/podman.sock `
+    -v //run/podman/podman.sock:/var/run/podman/podman.sock `
     gitopslab_bootstrap sh -c $applyModelCmd | Out-Null
 $forceCmd = ($kubectlBase + "kubectl -n apps set image deploy/hello-api hello-api=$deployImageTag --record=false") -join "`n"
 Write-Host "[e2e] Forcing deployment image to $deployImageTag ..."
 podman run --rm --network podman `
     -e DOCKER_HOST=unix:///var/run/podman/podman.sock `
-    -v /var/run/podman/podman.sock:/var/run/podman/podman.sock `
+    -v //run/podman/podman.sock:/var/run/podman/podman.sock `
     gitopslab_bootstrap sh -c $forceCmd | Out-Null
 
 function Get-ImageTag {
@@ -296,7 +354,7 @@ function Get-ImageTag {
     $cmd = ($cmdLines -join "`n")
     $out = podman run --rm --network podman `
         -e DOCKER_HOST=unix:///var/run/podman/podman.sock `
-        -v /var/run/podman/podman.sock:/var/run/podman/podman.sock `
+        -v //run/podman/podman.sock:/var/run/podman/podman.sock `
         gitopslab_bootstrap sh -c $cmd
     return $out.Trim()
 }
