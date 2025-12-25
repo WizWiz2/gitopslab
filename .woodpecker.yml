@@ -5,10 +5,19 @@ clone:
       remote: http://gitea:3000/${CI_REPO}.git
       branch: main
 
+x-skip-ci: &skip_ci |
+  case "${CI_COMMIT_MESSAGE:-}" in
+    *update\ woodpecker\ filter*|*sync\ workspace\ into\ Gitea*)
+      echo "Skipping pipeline for internal sync commit"
+      exit 0
+      ;;
+  esac
+
 steps:
   test:
     image: python:3.10-slim
     commands:
+      - *skip_ci
       - cd hello-api
       - pip install -r requirements.txt pytest
       - pytest -q
@@ -19,6 +28,7 @@ steps:
       MLFLOW_TRACKING_URI: http://host.containers.internal:8090
       MLFLOW_EXPERIMENT_NAME: hello-api-training
     commands:
+      - *skip_ci
       - mkdir -p ml/artifacts
       - pip install -r ml/requirements.txt
       - MODEL_OBJECT="ml-models/iris-${CI_COMMIT_SHA}.joblib"; python ml/train.py --output ml/artifacts/model.joblib --commit "${CI_COMMIT_SHA}" --model-object "$MODEL_OBJECT" --model-sha-path ml/artifacts/model.sha; echo "$MODEL_OBJECT" > ml/artifacts/model.object
@@ -30,6 +40,7 @@ steps:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     commands:
+      - *skip_ci
       - MODEL_OBJECT=$(cat ml/artifacts/model.object)
       - mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
       - mc mb --ignore-existing minio/ml-models
@@ -41,6 +52,7 @@ steps:
     environment:
       DOCKER_HOST: tcp://10.88.0.1:2375
     commands:
+      - *skip_ci
       - docker build -t registry.localhost:5002/hello-api:${CI_COMMIT_SHA} -f hello-api/Dockerfile hello-api
       - docker push registry.localhost:5002/hello-api:${CI_COMMIT_SHA}
     when:
@@ -52,6 +64,7 @@ steps:
       TRIVY_INSECURE: "true"
       TRIVY_SKIP_DB_UPDATE: "true"
     commands:
+      - *skip_ci
       - trivy image --exit-code 0 --severity HIGH,CRITICAL --scanners vuln --insecure host.containers.internal:5002/hello-api:${CI_COMMIT_SHA} || echo "trivy skipped (offline)"
     when:
       status: [success]
@@ -64,6 +77,7 @@ steps:
       GITEA_TOKEN:
         from_secret: gitea_token
     commands:
+      - *skip_ci
       - git config --global user.email "ci@gitopslab.local"
       - git config --global user.name "woodpecker"
       - cd gitops/apps/hello
@@ -82,3 +96,4 @@ when:
   message:
     exclude:
       - '^chore\(e2e\):'
+      - '^chore: sync workspace into Gitea'

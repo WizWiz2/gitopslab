@@ -262,7 +262,7 @@ find /tmp/repo_clone -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 tar --exclude=.git -C /workspace -cf - . | tar -C /tmp/repo_clone -xf -
 
 git add -A
-git commit -m "chore: sync workspace into Gitea" || echo "Nothing to commit"
+git commit -m "chore(e2e): sync workspace into Gitea [skip ci]" || echo "Nothing to commit"
 git push origin main
 log "Repository synced with workspace content."
 
