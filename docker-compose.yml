@@ -60,6 +60,8 @@ services:
       - WOODPECKER_GITEA_URL=${WOODPECKER_GITEA_URL}
       - WOODPECKER_GITEA_CLIENT=${WOODPECKER_GITEA_CLIENT}
       - WOODPECKER_GITEA_SECRET=${WOODPECKER_GITEA_SECRET}
+      - WOODPECKER_EXPERT_FORGE_OAUTH_HOST=${WOODPECKER_EXPERT_FORGE_OAUTH_HOST}
+      - WOODPECKER_EXPERT_WEBHOOK_HOST=${WOODPECKER_EXPERT_WEBHOOK_HOST}
       - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
       - WOODPECKER_ADMIN=${WOODPECKER_ADMIN}
     ports:
@@ -87,7 +89,8 @@ services:
       - WOODPECKER_SERVER=woodpecker-server:9000
       - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
       - WOODPECKER_BACKEND=docker
-      - DOCKER_HOST=${DOCKER_HOST}
+      - WOODPECKER_BACKEND_DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_default
+      - DOCKER_HOST=${PODMAN_DOCKER_HOST}
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     extra_hosts:
@@ -110,12 +113,17 @@ services:
       - .env
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./.env:/workspace/.env
+      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+      - ./.woodpecker.yml:/workspace/.woodpecker.yml:ro
       - ./gitops:/workspace/gitops
+      - ./hello-api:/workspace/hello-api
+      - ./ml:/workspace/ml
       - ./scripts:/workspace/scripts:ro
       - ./mlflow:/workspace/mlflow:ro
     environment:
       - BOOTSTRAP_TRACE=true
-      - DOCKER_HOST=${DOCKER_HOST}
+      - DOCKER_HOST=${PODMAN_DOCKER_HOST}
     entrypoint: ["/workspace/scripts/bootstrap.sh"]
     extra_hosts:
       - "registry.localhost:10.88.0.1"

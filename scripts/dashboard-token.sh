@@ -1,11 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-log() { echo "[dashboard-token] $*"; }
+log() { echo "[dashboard-token] $*" >&2; }
 
-# Wait until dashboard pods are ready (dashboard is deployed via kustomize/Argo)
-log "Waiting for Kubernetes Dashboard pods..."
-kubectl wait --for=condition=Ready pods -n kubernetes-dashboard --all --timeout=180s >/dev/null
+log "Waiting for Kubernetes API..."
+ready=0
+i=1
+while [ "$i" -le 30 ]; do
+  if kubectl get ns >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  log "Kubernetes API not ready yet, retrying... (${i}/30)"
+  i=$((i + 1))
+  sleep 2
+done
+if [ "$ready" -ne 1 ]; then
+  log "Kubernetes API not ready; cannot generate dashboard token"
+  exit 1
+fi
+
+log "Ensuring Kubernetes Dashboard namespace..."
+if ! kubectl get ns kubernetes-dashboard >/dev/null 2>&1; then
+  kubectl create ns kubernetes-dashboard >/dev/null 2>&1 || true
+fi
 
 # Ensure admin ServiceAccount/CRB exist (idempotent)
 cat <<'EOF' | kubectl apply -f -
@@ -31,4 +49,17 @@ EOF
 
 # Emit a fresh token to stdout
 log "Generating dashboard token..."
-kubectl -n kubernetes-dashboard create token admin-user
+i=1
+while [ "$i" -le 30 ]; do
+  token="$(kubectl -n kubernetes-dashboard create token admin-user 2>/dev/null || true)"
+  if [ -n "$token" ]; then
+    echo "$token"
+    exit 0
+  fi
+  log "Token not ready yet, retrying... (${i}/30)"
+  i=$((i + 1))
+  sleep 2
+done
+
+log "Failed to generate dashboard token"
+exit 1

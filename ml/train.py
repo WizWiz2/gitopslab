@@ -29,7 +29,7 @@ def train(output: pathlib.Path):
     joblib.dump(bundle, output)
     sha = hashlib.sha256(output.read_bytes()).hexdigest()
     print(f"[train] saved model to {output} (acc={acc:.3f}, sha={sha[:12]})")
-    return acc, sha
+    return model, acc, sha
 
 
 def main():
@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--experiment", default=os.getenv("MLFLOW_EXPERIMENT_NAME", "hello-api-training"))
     parser.add_argument("--tracking-uri", default=os.getenv("MLFLOW_TRACKING_URI", ""))
     args = parser.parse_args()
-    acc, sha = train(args.output)
+    model, acc, sha = train(args.output)
 
     if args.model_sha_path:
         args.model_sha_path.write_text(f"{sha}\n", encoding="utf-8")
@@ -62,6 +62,16 @@ def main():
             mlflow.log_param("model_sha", sha)
             mlflow.set_tag("commit_sha", args.commit)
             mlflow.set_tag("model_object", args.model_object)
+            try:
+                import mlflow.sklearn
+
+                model_name = os.getenv("MLFLOW_MODEL_NAME")
+                if model_name:
+                    mlflow.sklearn.log_model(model, artifact_path="model", registered_model_name=model_name)
+                else:
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+            except Exception as exc:
+                print(f"[train] mlflow model logging skipped: {exc}")
             mlflow.log_artifact(str(args.output))
             print(f"[train] mlflow run {run.info.run_id}")
 

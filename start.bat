@@ -39,6 +39,12 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
+REM Avoid creating NUL known_hosts files when Podman uses ssh
+set "SSH_WRAPPER_DIR=%~dp0scripts\bin"
+if exist "%SSH_WRAPPER_DIR%\ssh.cmd" (
+    set "PATH=%SSH_WRAPPER_DIR%;!PATH!"
+)
+
 echo [Start] Detecting container runtime...
 
 REM Check for Podman
@@ -74,8 +80,11 @@ if !errorlevel! equ 0 (
     if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.88.0.1"
     set "PODMAN_SERVICE_PORT=2375"
     set "DOCKER_HOST=tcp://!PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT!"
+    set "PODMAN_DOCKER_HOST=!DOCKER_HOST!"
     echo [Start] Configuring Podman VM registry access...
-    podman machine ssh -- "grep -q 'registry.localhost' /etc/hosts || echo '127.0.0.1 registry.localhost' >> /etc/hosts"
+    set "HOSTS_NAMES=registry.localhost gitea.localhost woodpecker.localhost argocd.localhost demo.localhost mlflow.localhost minio.localhost apps.localhost k8s.localhost dashboard.localhost"
+    set "HOSTS_PATTERN=registry\.localhost|gitea\.localhost|woodpecker\.localhost|argocd\.localhost|demo\.localhost|mlflow\.localhost|minio\.localhost|apps\.localhost|k8s\.localhost|dashboard\.localhost"
+    podman machine ssh -- "grep -v -E '!HOSTS_PATTERN!' /etc/hosts > /tmp/hosts && printf '!PODMAN_GATEWAY! !HOSTS_NAMES!\n' >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
     podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' >> /etc/containers/registries.conf"
     podman machine ssh -- "pkill -f 'podman system service' || true"
     echo [Start] Ensuring Podman API service on !PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT! ...
@@ -181,9 +190,14 @@ if !errorlevel! neq 0 (
 REM Generate dashboard token and save locally
 echo [Start] Fetching Kubernetes Dashboard token...
 %CTR_BIN% exec platform-bootstrap /workspace/scripts/dashboard-token.sh > dashboard-token.txt 2>nul
+set "TOKEN_SIZE=0"
 if exist dashboard-token.txt (
+    for %%I in (dashboard-token.txt) do set "TOKEN_SIZE=%%~zI"
+)
+if !TOKEN_SIZE! gtr 40 (
     echo [Start] Dashboard token saved to dashboard-token.txt
 ) else (
+    del /q dashboard-token.txt 2>nul
     echo [Warn] Could not fetch dashboard token automatically. Use podman exec platform-bootstrap /workspace/scripts/dashboard-token.sh
 )
 
@@ -214,6 +228,7 @@ echo Platform:
 echo   Ingress/LB:  http://apps.localhost:8080
 echo   K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
 echo   K8s Dashboard: https://dashboard.localhost:32443
+echo   K8s Dashboard (apps): https://dashboard.localhost:32443/#/overview?namespace=apps
 echo --------------------------------------------------------
 "%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul 2>&1
 exit /b 0
