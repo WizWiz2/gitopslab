@@ -13,16 +13,16 @@ docker compose up -d
 Just run `start.bat`. It will create the configuration file, download a local Docker CLI (if missing), and start the containers using Docker or Podman automatically. The `bootstrap` container provisions k3d, installs Argo CD, and applies the GitOps root application automatically.
 
 ### URLs
-- Gitea: http://gitea.localhost:3000 (SSH: ssh://git@gitea.localhost:2222)
-- Registry: http://registry.localhost:5001/v2/ (in-cluster mirror: k3d-registry.localhost:5002)
+- Gitea: http://gitea.localhost:3000 
+- Registry: http://registry.localhost:5001/v2/ 
 - Woodpecker: http://woodpecker.localhost:8000
 - Argo CD: http://argocd.localhost:8081
 - MLflow: http://mlflow.localhost:8090
 - MinIO API: http://minio.localhost:9090
 - MinIO UI: http://minio.localhost:9091
 - Ingress/LB: http://apps.localhost:8080
-- K8s Dashboard: https://dashboard.localhost:32443 (token выводится в dashboard-token.txt после `start.bat`)
-- K8s API: https://k8s.localhost:6550 (k3d gitopslab) — 401 в браузере нормально, используйте kubeconfig/token
+- K8s Dashboard: https://dashboard.localhost:32443 
+- K8s API: https://k8s.localhost:6550 (k3d gitopslab) 
 - Demo app: http://demo.localhost:8088
 - ML Predict: http://demo.localhost:8088/predict
 
