@@ -26,7 +26,7 @@ services:
       - "minio.localhost:10.88.0.1"
       - "mlflow.localhost:10.88.0.1"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/healthcheck" ]
       interval: 20s
       timeout: 5s
       retries: 5
@@ -40,7 +40,7 @@ services:
     volumes:
       - registry-data:/var/lib/registry
     healthcheck:
-      test: ["CMD", "wget", "--spider", "http://localhost:5000/v2/"]
+      test: [ "CMD", "wget", "--spider", "http://localhost:5000/v2/" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -123,8 +123,8 @@ services:
       - ./mlflow:/workspace/mlflow:ro
     environment:
       - BOOTSTRAP_TRACE=true
-      - DOCKER_HOST=${PODMAN_DOCKER_HOST}
-    entrypoint: ["/workspace/scripts/bootstrap.sh"]
+      - DOCKER_HOST=tcp://10.88.0.1:2375
+    entrypoint: [ "/workspace/scripts/bootstrap.sh" ]
     extra_hosts:
       - "registry.localhost:10.88.0.1"
     networks:
@@ -135,6 +135,7 @@ volumes:
   gitea-data:
   registry-data:
   woodpecker-data:
+
 
 networks:
   default: {}

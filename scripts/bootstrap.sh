@@ -189,7 +189,15 @@ install_argocd() {
   fi
   log "installing Argo CD"
   kubectl create namespace argocd
-  kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v${ARGOCD_VERSION}/manifests/install.yaml
+  # Use bundled manifest to avoid network issues in Podman VM
+  local manifest="/workspace/scripts/argocd-install.yaml"
+  if [[ -f "$manifest" ]]; then
+    log "using bundled ArgoCD manifest"
+    kubectl apply -n argocd -f "$manifest"
+  else
+    log "bundled manifest not found, downloading from GitHub"
+    kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v${ARGOCD_VERSION}/manifests/install.yaml
+  fi
 }
 
 apply_root_app() {
