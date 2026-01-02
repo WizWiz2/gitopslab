@@ -19,14 +19,14 @@ services:
       - "${GITEA_HTTP_PORT}:3000"
       - "${GITEA_SSH_PORT}:22"
     extra_hosts:
-      - "gitea.localhost:10.88.0.1"
-      - "woodpecker.localhost:10.88.0.1"
-      - "argocd.localhost:10.88.0.1"
-      - "demo.localhost:10.88.0.1"
-      - "minio.localhost:10.88.0.1"
-      - "mlflow.localhost:10.88.0.1"
+      - "gitea.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "woodpecker.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "argocd.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "demo.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "minio.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "mlflow.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/healthz" ]
       interval: 20s
       timeout: 5s
       retries: 5
@@ -40,7 +40,7 @@ services:
     volumes:
       - registry-data:/var/lib/registry
     healthcheck:
-      test: ["CMD", "wget", "--spider", "http://localhost:5000/v2/"]
+      test: [ "CMD", "wget", "--spider", "http://localhost:5000/v2/" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -67,13 +67,13 @@ services:
     ports:
       - "${WOODPECKER_SERVER_PORT}:8000"
     extra_hosts:
-      - "localhost:10.88.0.1"
-      - "gitea.localhost:10.88.0.1"
-      - "woodpecker.localhost:10.88.0.1"
-      - "argocd.localhost:10.88.0.1"
-      - "demo.localhost:10.88.0.1"
-      - "minio.localhost:10.88.0.1"
-      - "mlflow.localhost:10.88.0.1"
+      - "localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "gitea.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "woodpecker.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "argocd.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "demo.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "minio.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "mlflow.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
     volumes:
       - woodpecker-data:/var/lib/woodpecker
 
@@ -94,12 +94,12 @@ services:
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     extra_hosts:
-      - "gitea.localhost:10.88.0.1"
-      - "woodpecker.localhost:10.88.0.1"
-      - "argocd.localhost:10.88.0.1"
-      - "demo.localhost:10.88.0.1"
-      - "minio.localhost:10.88.0.1"
-      - "mlflow.localhost:10.88.0.1"
+      - "gitea.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "woodpecker.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "argocd.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "demo.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "minio.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
+      - "mlflow.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
 
   bootstrap:
     build:
@@ -123,10 +123,10 @@ services:
       - ./mlflow:/workspace/mlflow:ro
     environment:
       - BOOTSTRAP_TRACE=true
-      - DOCKER_HOST=${PODMAN_DOCKER_HOST}
-    entrypoint: ["/workspace/scripts/bootstrap.sh"]
+      - DOCKER_HOST=${PODMAN_DOCKER_HOST:-tcp://10.88.0.1:2375}
+    entrypoint: [ "/workspace/scripts/bootstrap.sh" ]
     extra_hosts:
-      - "registry.localhost:10.88.0.1"
+      - "registry.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
     networks:
       - default
       - podman
@@ -135,6 +135,7 @@ volumes:
   gitea-data:
   registry-data:
   woodpecker-data:
+
 
 networks:
   default: {}
