@@ -26,7 +26,7 @@ services:
       - "minio.localhost:host-gateway"
       - "mlflow.localhost:host-gateway"
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:3000/healthcheck" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/healthz" ]
       interval: 20s
       timeout: 5s
       retries: 5

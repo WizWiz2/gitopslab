@@ -68,9 +68,9 @@ create_cluster() {
     fi
   fi
   log "creating k3d cluster ${K3D_CLUSTER_NAME}"
-  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false \
+  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false --image rancher/k3s:v1.24.4-k3s1 \
     --api-port ${K3D_API_PORT} \
-    --servers 1 --agents 1 \
+    --servers 1 --agents 0 \
     --port "8080:80@loadbalancer" \
     --port "8081:30081@server:0" \
     --port "8088:30888@server:0" \
@@ -81,7 +81,9 @@ create_cluster() {
     --network "${K3D_NETWORK:-bridge}" \
     --registry-use ${K3D_REGISTRY_NAME}:${K3D_REGISTRY_PORT} \
     --registry-config /workspace/scripts/registries.yaml \
-    --k3s-arg "--disable=traefik@server:0"
+    --k3s-arg "--disable=traefik@server:0" \
+    --k3s-arg "--snapshotter=native@server:0" \
+    --volume k3d-storage:/var/lib/rancher/k3s@server:0
 }
 
 ensure_loadbalancer_config() {
@@ -217,19 +219,19 @@ bootstrap() {
   
   # Wait for Gitea and Woodpecker to be up (TCP check)
   log "Waiting for Gitea..."
-  /workspace/scripts/wait-for.sh "http://gitea:3000"
+  bash /workspace/scripts/wait-for.sh "http://gitea:3000"
   
   log "Waiting for Woodpecker..."
-  /workspace/scripts/wait-for.sh "http://woodpecker-server:8000"
+  bash /workspace/scripts/wait-for.sh "http://woodpecker-server:8000"
 
   log "Initializing Gitea..."
-  /workspace/scripts/init-gitea.sh
+  bash /workspace/scripts/init-gitea.sh
 
   log "Initializing Woodpecker..."
-  /workspace/scripts/init-woodpecker.sh
+  bash /workspace/scripts/init-woodpecker.sh
 
   log "Initializing Argo CD..."
-  /workspace/scripts/init-argocd.sh
+  bash /workspace/scripts/init-argocd.sh
 
   apply_root_app
 }
