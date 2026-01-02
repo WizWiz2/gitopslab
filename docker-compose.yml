@@ -123,7 +123,7 @@ services:
       - ./mlflow:/workspace/mlflow:ro
     environment:
       - BOOTSTRAP_TRACE=true
-      - DOCKER_HOST=${PODMAN_DOCKER_HOST:-tcp://10.88.0.1:2375}
+      - DOCKER_HOST=${PODMAN_DOCKER_HOST:-unix:///var/run/docker.sock}
     entrypoint: [ "/workspace/scripts/bootstrap.sh" ]
     extra_hosts:
       - "registry.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
