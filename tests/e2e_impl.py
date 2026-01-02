@@ -1,4 +1,3 @@
-
 import os
 import sys
 import time
@@ -21,6 +20,17 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ENV_PATH = os.path.join(REPO_ROOT, ".env")
 
 def read_env(path: str) -> Dict[str, str]:
+    """
+    Load simple environment-style KEY=VALUE pairs from a file into a dictionary.
+    
+    Empty lines and lines starting with `#` are ignored. Lines without an `=` are skipped. Leading and trailing whitespace around keys and values is removed.
+    
+    Parameters:
+        path (str): Path to the file containing environment variables.
+    
+    Returns:
+        Dict[str, str]: Mapping of keys to their corresponding values read from the file.
+    """
     env = {}
     if not os.path.isfile(path):
         return env
@@ -61,6 +71,23 @@ AUTH_HEADER = {
 # Helper Functions
 def run_command(cmd: list, check: bool = True, capture_output: bool = True, timeout: int = None) -> subprocess.CompletedProcess:
     # Use sudo for docker commands if we are not root (simple check)
+    """
+    Run a subprocess command and return its CompletedProcess result.
+    
+    Prepends "sudo" to the command when the executable is "docker" and the current process is not running as root, prints a debug line before execution, and logs command output on failure.
+    
+    Parameters:
+        cmd (list): The command and its arguments as a list of strings. Note: the list may be modified in-place (e.g., "sudo" may be inserted).
+        check (bool): If True, raise subprocess.CalledProcessError on non-zero exit status.
+        capture_output (bool): If True, capture stdout and stderr and return them on the CompletedProcess.
+        timeout (int | None): Time in seconds after which the command will be terminated; None means no timeout.
+    
+    Returns:
+        subprocess.CompletedProcess: The completed process result (contains returncode, stdout, stderr, etc.).
+    
+    Raises:
+        subprocess.CalledProcessError: If `check` is True and the subprocess exits with a non-zero status; stdout and stderr are printed before the exception is re-raised.
+    """
     if cmd[0] == "docker" and os.geteuid() != 0:
         cmd.insert(0, "sudo")
 
@@ -74,6 +101,18 @@ def run_command(cmd: list, check: bool = True, capture_output: bool = True, time
         raise
 
 def resolve_url(url: str, fallback_host: str = "localhost") -> str:
+    """
+    Resolve a URL to a reachable host, substituting a fallback host when the original hostname cannot be resolved.
+    
+    If the URL's hostname resolves via DNS the original URL (without a trailing slash) is returned. If the hostname does not resolve, the hostname is replaced with `fallback_host` (preserving the original port, if any) and the resulting URL without a trailing slash is returned.
+    
+    Parameters:
+        url (str): The input URL to check and possibly rewrite.
+        fallback_host (str): Hostname to substitute when the original hostname cannot be resolved.
+    
+    Returns:
+        str: The resolved or rewritten URL with no trailing slash.
+    """
     from urllib.parse import urlparse
     u = urlparse(url)
     try:
@@ -85,12 +124,38 @@ def resolve_url(url: str, fallback_host: str = "localhost") -> str:
         return u._replace(netloc=new_netloc).geturl().rstrip("/")
 
 def rewrite_url_host(url: str, target_host: str) -> str:
+    """
+    Rewrite the host (and preserve port) of a URL and remove any trailing slash.
+    
+    Parameters:
+        url (str): The original URL to modify.
+        target_host (str): The hostname to use in the resulting URL (port from the original URL is preserved if present).
+    
+    Returns:
+        str: The rewritten URL with `target_host` as the host and without a trailing slash.
+    """
     from urllib.parse import urlparse
     u = urlparse(url)
     new_netloc = f"{target_host}:{u.port}" if u.port else target_host
     return u._replace(netloc=new_netloc).geturl().rstrip("/")
 
 def http_request(url: str, method: str = "GET", headers: Dict = None, data: Any = None, json_data: Any = None) -> Any:
+    """
+    Send an HTTP request and return the response body, decoding JSON responses.
+    
+    Parameters:
+        url (str): Request URL.
+        method (str): HTTP method to use (e.g., "GET", "POST").
+        headers (Dict, optional): Additional request headers.
+        data (Any, optional): Raw request body to send. Ignored when `json_data` is provided.
+        json_data (Any, optional): Object to JSON-encode and send as the request body; sets `Content-Type: application/json`.
+    
+    Returns:
+        The parsed JSON object when the response Content-Type is "application/json", otherwise the raw response bytes.
+    
+    Raises:
+        urllib.error.HTTPError: Propagates HTTP errors from the request.
+    """
     if json_data:
         data = json.dumps(json_data).encode("utf-8")
         if headers is None: headers = {}
@@ -108,6 +173,17 @@ def http_request(url: str, method: str = "GET", headers: Dict = None, data: Any 
         raise
 
 def wait_for_http(name: str, check_fn, timeout: int = 60, interval: int = 2):
+    """
+    Waits until the provided check function completes without raising, or raises TimeoutError after the timeout elapses.
+    
+    Calls `check_fn` repeatedly, sleeping `interval` seconds between attempts, and prints a retry message on each failure. Raises `TimeoutError` if `check_fn` does not succeed within `timeout` seconds.
+    
+    Parameters:
+        name (str): Human-readable name used in retry and timeout messages.
+        check_fn (callable): Zero-argument callable that should perform a readiness check and raise on failure.
+        timeout (int): Maximum time in seconds to wait for `check_fn` to succeed.
+        interval (int): Seconds to wait between successive attempts.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -119,6 +195,16 @@ def wait_for_http(name: str, check_fn, timeout: int = 60, interval: int = 2):
     raise TimeoutError(f"{name} not ready after {timeout}s")
 
 def get_woodpecker_user(volume: str, login: str) -> Optional[Dict[str, str]]:
+    """
+    Fetch the Woodpecker user record (id and password hash) from a SQLite database stored in a Docker volume.
+    
+    Parameters:
+        volume (str): Docker volume path or name that contains `woodpecker.sqlite`.
+        login (str): User login to look up.
+    
+    Returns:
+        Optional[Dict[str, str]]: A dictionary with keys `id` and `hash` if the user is found, `None` otherwise.
+    """
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp_path = tmp.name
 
@@ -146,6 +232,16 @@ def get_woodpecker_user(volume: str, login: str) -> Optional[Dict[str, str]]:
             os.remove(tmp_path)
 
 def generate_woodpecker_token(user_id: str, user_hash: str) -> str:
+    """
+    Create a Woodpecker-compatible JWT-like token for the given user.
+    
+    Parameters:
+        user_id (str): The Woodpecker user ID (string form of an integer).
+        user_hash (str): The user's hash from the Woodpecker database used as the HMAC-SHA256 signing key.
+    
+    Returns:
+        str: Token in `header.payload.signature` form where the signature is HMAC-SHA256 of `header.payload` using `user_hash` as the key.
+    """
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "user-id": int(user_id),
@@ -154,6 +250,12 @@ def generate_woodpecker_token(user_id: str, user_hash: str) -> str:
     }
 
     def b64url(b: bytes) -> str:
+        """
+        Encode bytes to a URL-safe Base64 string without padding.
+        
+        Returns:
+            The URL-safe Base64 representation of `b` with trailing `=` characters removed.
+        """
         return base64.urlsafe_b64encode(b).rstrip(b"=").decode("utf-8")
 
     header_b64 = b64url(json.dumps(header, separators=(',', ':')).encode("utf-8"))
@@ -168,12 +270,36 @@ def generate_woodpecker_token(user_id: str, user_hash: str) -> str:
     return f"{message}.{signature_b64}"
 
 def get_server_endpoint(cluster: str) -> Dict[str, Any]:
+    """
+    Return the API server endpoint information for a k3d cluster.
+    
+    Parameters:
+        cluster (str): Name of the k3d cluster.
+    
+    Returns:
+        dict: A mapping with keys:
+            - `ip` (str): IP address of the cluster's server container, or an empty string if not found.
+            - `port` (int): API server port (always 6443).
+            - `cluster` (str): The provided cluster name.
+    """
     cmd = ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", f"k3d-{cluster}-server-0"]
     res = run_command(cmd, check=False)
     ip = res.stdout.strip()
     return {"ip": ip, "port": 6443, "cluster": cluster}
 
 def invoke_kubectl(command: str) -> str:
+    """
+    Execute a shell command against the cluster's kubectl context or, if available, inside the platform-bootstrap container.
+    
+    Parameters:
+        command (str): Shell command to run (typically a kubectl command). The command will be executed directly inside the platform-bootstrap container when present; otherwise a temporary container will prepare kubeconfig for the k3d cluster and run the command.
+    
+    Returns:
+        str: The standard output from the executed command.
+    
+    Raises:
+        Exception: If the function cannot determine the k3d server IP required to configure kubeconfig.
+    """
     try:
         res = run_command(["docker", "ps", "-q", "-f", "name=platform-bootstrap"], check=False)
         if res.stdout.strip():
@@ -208,6 +334,13 @@ sed -i 's|127.0.0.1|{server['ip']}|g' /root/.kube/config
 
 
 def main():
+    """
+    Run the end-to-end test workflow that validates platform services, triggers CI, builds and deploys a model, and verifies the demo application.
+    
+    Performs health checks for MinIO, MLflow, and Woodpecker; ensures a Woodpecker user and repository are present and configured; creates a commit to trigger a Woodpecker pipeline; runs a training job to produce a model artifact and uploads it to MinIO; updates model and deployment manifests in the Git repository and commits those changes; builds, tags, and pushes a deployment image; attempts to apply the updated manifests to the Kubernetes cluster (if available) and waits for the deployment to roll out; and finally verifies the demo application's root and /predict endpoints.
+    
+    Side effects: may create or update Git commits and repository contents, restart containers, run Docker commands, write artifacts under the repository (ml/artifacts), and interact with remote services (Gitea, Woodpecker, MinIO, MLflow, Docker, and Kubernetes).
+    """
     print("=== Starting E2E Test (Python Impl) ===")
 
     minio_url = resolve_url(MINIO_URL)
@@ -329,6 +462,15 @@ def main():
         pass
 
     def ensure_secret(name, value):
+        """
+        Ensure a repository-level secret exists in the configured Woodpecker repository.
+        
+        If `value` is falsy the function does nothing. The function attempts to list existing secrets and returns if a secret with `name` already exists; otherwise it creates the secret via the Woodpecker API.
+        
+        Parameters:
+            name (str): Secret name to ensure exists.
+            value (str): Secret value to create when the secret is absent; if falsy, no action is taken.
+        """
         if not value: return
         try:
             secrets = http_request(f"{woodpecker_url}/api/repos/{wp_repo_id}/secrets", headers=wp_headers)

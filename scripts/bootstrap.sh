@@ -42,6 +42,8 @@ build_mlflow_image() {
   docker push "${MLFLOW_IMAGE}"
 }
 
+# create_cluster creates (or restores) the k3d cluster for the environment and ensures the load balancer exposes the required ports.
+# If the named cluster exists this function verifies the load balancer ports used by MLflow/MinIO and either starts existing node containers or deletes the cluster for recreation when ports are missing; otherwise it creates a new cluster with the configured API port, image, server count, port mappings, registry integration, disabled Traefik, native snapshotter, and a persistent k3d storage volume.
 create_cluster() {
   if k3d cluster list | grep -q "${K3D_CLUSTER_NAME}"; then
     log "cluster ${K3D_CLUSTER_NAME} already exists"
@@ -86,6 +88,7 @@ create_cluster() {
     --volume k3d-storage:/var/lib/rancher/k3s@server:0
 }
 
+# ensure_loadbalancer_config generates a YAML mapping of service ports to cluster node IPs, copies it to the k3d load balancer at /etc/confd/values.yaml, and starts the load balancer container.
 ensure_loadbalancer_config() {
   local lb="k3d-${K3D_CLUSTER_NAME}-serverlb"
   if ! docker inspect "$lb" >/dev/null 2>&1; then
@@ -184,6 +187,7 @@ wait_for_k8s_api() {
   done
 }
 
+# install_argocd installs Argo CD into the cluster, creates the `argocd` namespace, applies the bundled manifest at /workspace/scripts/argocd-install.yaml if present or falls back to the official GitHub manifest for ARGOCD_VERSION, and does nothing if the `argocd` namespace already exists.
 install_argocd() {
   if kubectl get ns argocd >/dev/null 2>&1; then
     log "Argo CD already installed"
@@ -202,11 +206,13 @@ install_argocd() {
   fi
 }
 
+# apply_root_app applies the root Argo CD application manifest to the cluster by applying /workspace/gitops/argocd/root-app.yaml.
 apply_root_app() {
   log "applying root application"
   kubectl apply -f /workspace/gitops/argocd/root-app.yaml
 }
 
+# bootstrap orchestrates the full local platform bootstrap: it ensures the registry, builds and pushes the MLflow image, creates and configures the k3d cluster and load balancer, patches registry host entries, prepares kubeconfig, waits for the Kubernetes API, installs Argo CD, waits for and initializes Gitea and Woodpecker, initializes Argo CD, and applies the root Argo CD application.
 bootstrap() {
   create_registry
   build_mlflow_image
