@@ -96,45 +96,37 @@ class TestE2EScenario:
     def test_run_e2e_script(self):
         """
         Runs the E2E scenario.
-        Attempts to run 'run-e2e.bat' on Windows, or 'tests/e2e.ps1' directly otherwise.
+        Attempts to run 'run-e2e.bat' on Windows, or the python implementation 'tests/e2e_impl.py' otherwise.
         """
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         bat_path = os.path.join(repo_root, "run-e2e.bat")
-        ps1_path = os.path.join(repo_root, "tests", "e2e.ps1")
+        py_impl_path = os.path.join(repo_root, "tests", "e2e_impl.py")
 
         if os.name == 'nt' and os.path.exists(bat_path):
             print(f"Running {bat_path}...")
             # .bat files on Windows need shell=True or explicit cmd /c
             # passing timeout 600
             result = subprocess.run([bat_path, "600"], shell=True, capture_output=True, text=True)
+            print("STDOUT:", result.stdout)
+            print("STDERR:", result.stderr)
+
+            if result.returncode != 0:
+                pytest.fail(f"E2E script failed with exit code {result.returncode}. See stdout/stderr for details.")
         else:
-            if not os.path.exists(ps1_path):
-                 pytest.fail(f"e2e script not found at {ps1_path}")
+            if not os.path.exists(py_impl_path):
+                 pytest.fail(f"e2e python implementation not found at {py_impl_path}")
 
-            # Detect shell
-            shell = None
-            for sh in ["pwsh", "powershell"]:
-                try:
-                    subprocess.run([sh, "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    shell = sh
-                    break
-                except FileNotFoundError:
-                    continue
-
-            if not shell:
-                pytest.skip("PowerShell (pwsh/powershell) not found, skipping E2E script execution.")
-
-            print(f"Running {ps1_path} using {shell}...")
-
-            # Use -File for direct script execution
-            cmd = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_path, "-TimeoutSec", "600"]
+            print(f"Running {py_impl_path}...")
+            # Run the python script
+            cmd = [sys.executable, py_impl_path]
+            # Stream output live would be better, but capture_output=True is easier for now to check result
             result = subprocess.run(cmd, capture_output=True, text=True)
 
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
+            print("STDOUT:", result.stdout)
+            print("STDERR:", result.stderr)
 
-        if result.returncode != 0:
-            pytest.fail(f"E2E script failed with exit code {result.returncode}. See stdout/stderr for details.")
+            if result.returncode != 0:
+                pytest.fail(f"E2E python script failed with exit code {result.returncode}. See stdout/stderr for details.")
 
 @pytest.fixture(scope="function", autouse=True)
 def diagnose_argocd_failure(request):
