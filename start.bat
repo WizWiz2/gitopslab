@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
+set "MSYS_NO_PATHCONV=1"
 
 echo [Start] Checking environment...
 
@@ -73,8 +74,11 @@ if !errorlevel! equ 0 (
                  exit /b 1
             )
         )
-         REM Wait a bit for the socket to be ready
-        "%SystemRoot%\System32\timeout.exe" /t 10 /nobreak >nul
+        echo [Start] Fixing DNS in Podman machine...
+        podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
+    ) else (
+        echo [Start] Ensuring DNS is fixed in Podman machine...
+        podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
     )
 
     if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.88.0.1"
@@ -88,7 +92,7 @@ if !errorlevel! equ 0 (
     podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' >> /etc/containers/registries.conf"
     podman machine ssh -- "pkill -f 'podman system service' || true"
     echo [Start] Ensuring Podman API service on !PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT! ...
-    podman machine ssh -- "nohup podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1 &"
+    podman machine ssh -- "systemd-run --user --unit=podman-tcp --remain-after-exit podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1" || podman machine ssh -- "nohup podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1 &"
     if !errorlevel! neq 0 (
         echo [Error] Failed to start Podman API service inside the VM.
         pause
@@ -168,6 +172,8 @@ exit /b 1
 
 :run
 if not "%COMPOSE_BIN%"=="" (
+    echo [Start] cleaning up old bootstrap...
+    podman rm -f platform-bootstrap >nul 2>&1
     echo [Start] Starting services with !COMPOSE_BIN! !COMPOSE_ARGS!...
     "!COMPOSE_BIN!" !COMPOSE_ARGS! up -d --remove-orphans --force-recreate
 ) else (

@@ -68,7 +68,7 @@ create_cluster() {
     fi
   fi
   log "creating k3d cluster ${K3D_CLUSTER_NAME}"
-  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false --image rancher/k3s:v1.24.4-k3s1 \
+  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false --image rancher/k3s:v1.29.6-k3s2 \
     --api-port ${K3D_API_PORT} \
     --servers 1 --agents 0 \
     --port "8080:80@loadbalancer" \
