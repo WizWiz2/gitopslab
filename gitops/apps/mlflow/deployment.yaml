@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: mlflow
-          image: registry.localhost:5002/mlflow:lite
+          image: k3d-registry.localhost:5000/mlflow:lite
           imagePullPolicy: Always
           command:
             - mlflow

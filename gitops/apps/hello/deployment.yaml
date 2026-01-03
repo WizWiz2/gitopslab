@@ -56,7 +56,7 @@ spec:
               mountPath: /models
       containers:
         - name: hello-api
-          image: registry.localhost:5002/hello-api:dev
+          image: k3d-registry.localhost:5000/hello-api:dev
           imagePullPolicy: IfNotPresent
           env:
             - name: MODEL_PATH
