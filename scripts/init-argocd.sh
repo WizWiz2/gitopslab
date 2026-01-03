@@ -11,6 +11,10 @@ ARGOCD_SERVER="argocd-server.argocd.svc.cluster.local"
 log "Waiting for Argo CD pods..."
 kubectl wait --for=condition=Ready pods --all -n argocd --timeout=300s
 
+# Patch Argo CD to run in insecure mode (HTTP)
+log "Patching Argo CD deployment to run in insecure mode..."
+kubectl patch deployment argocd-server -n argocd --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["/usr/local/bin/argocd-server", "--insecure"]}]'
+
 # Экспонируем argocd-server наружу через k3d servicelb
 current_nodeport="$(kubectl get svc argocd-server -n argocd -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}' 2>/dev/null || true)"
 if [ "$current_nodeport" = "30081" ]; then

@@ -30,6 +30,9 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    networks:
+      - default
+      - k3d
 
   registry:
     image: registry:${REGISTRY_VERSION}
@@ -44,6 +47,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - default
+      - k3d
 
   woodpecker-server:
     image: woodpeckerci/woodpecker-server:${WOODPECKER_VERSION}
@@ -128,8 +134,7 @@ services:
     extra_hosts:
       - "registry.localhost:${HOST_GATEWAY_IP:-10.88.0.1}"
     networks:
-      - default
-      - podman
+      - k3d
 
 volumes:
   gitea-data:
@@ -139,6 +144,6 @@ volumes:
 
 networks:
   default: {}
-  podman:
+  k3d:
     external: true
-    name: podman
+    name: k3d

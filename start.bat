@@ -59,8 +59,13 @@ if !errorlevel! equ 0 (
         echo [Start] Podman machine seems to be stopped or missing. Attempting to start...
         podman machine start >nul 2>nul
         if !errorlevel! neq 0 (
-            echo [Start] Start failed. Attempting to initialize new Podman machine...
-            podman machine init
+            echo [Start] Start failed. Attempting to initialize new Podman machine with more resources...
+            REM Remove old machine if exists (failed start usually means broken or old config)
+            podman machine rm -f >nul 2>nul
+            
+            REM Initialize with explicit resources: 4 CPUs, 8GB RAM, 50GB Disk
+            podman machine init --cpus 4 --memory 8192 --disk-size 50
+            
             if !errorlevel! neq 0 (
                 echo [Error] Failed to initialize Podman machine. Please install WSL2 and Podman correctly.
                 pause
@@ -88,8 +93,8 @@ if !errorlevel! equ 0 (
     echo [Start] Configuring Podman VM registry access...
     set "HOSTS_NAMES=registry.localhost gitea.localhost woodpecker.localhost argocd.localhost demo.localhost mlflow.localhost minio.localhost apps.localhost k8s.localhost dashboard.localhost"
     set "HOSTS_PATTERN=registry\.localhost|gitea\.localhost|woodpecker\.localhost|argocd\.localhost|demo\.localhost|mlflow\.localhost|minio\.localhost|apps\.localhost|k8s\.localhost|dashboard\.localhost"
-    podman machine ssh -- "grep -v -E '!HOSTS_PATTERN!' /etc/hosts > /tmp/hosts && printf '!PODMAN_GATEWAY! !HOSTS_NAMES!\n' >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
-    podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' >> /etc/containers/registries.conf"
+    podman machine ssh -- "grep -v -E '!HOSTS_PATTERN!' /etc/hosts > /tmp/hosts && printf '!PODMAN_GATEWAY! !HOSTS_NAMES!\n' >> /tmp/hosts && cat /tmp/hosts | sudo tee /etc/hosts > /dev/null"
+    podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' | sudo tee -a /etc/containers/registries.conf > /dev/null"
     podman machine ssh -- "pkill -f 'podman system service' || true"
     echo [Start] Ensuring Podman API service on !PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT! ...
     podman machine ssh -- "systemd-run --user --unit=podman-tcp --remain-after-exit podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1" || podman machine ssh -- "nohup podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1 &"
@@ -97,6 +102,20 @@ if !errorlevel! equ 0 (
         echo [Error] Failed to start Podman API service inside the VM.
         pause
         exit /b 1
+    )
+    
+    REM Create k3d network with DNS enabled (required for k3d clusters)
+    echo [Start] Creating k3d network with DNS...
+    podman network exists k3d >nul 2>nul
+    if !errorlevel! neq 0 (
+        podman network create k3d
+        if !errorlevel! neq 0 (
+            echo [Error] Failed to create k3d network.
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo [Start] k3d network already exists
     )
 
     REM Prefer podman-compose; podman compose falls back to docker-compose and breaks on Windows here

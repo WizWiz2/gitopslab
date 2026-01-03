@@ -68,7 +68,7 @@ create_cluster() {
     fi
   fi
   log "creating k3d cluster ${K3D_CLUSTER_NAME}"
-  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false --image rancher/k3s:v1.29.6-k3s2 \
+  k3d cluster create ${K3D_CLUSTER_NAME} --wait=false --image rancher/k3s:v1.27.4-k3s1 \
     --api-port ${K3D_API_PORT} \
     --servers 1 --agents 0 \
     --port "8080:80@loadbalancer" \
@@ -81,9 +81,7 @@ create_cluster() {
     --network "${K3D_NETWORK:-bridge}" \
     --registry-use ${K3D_REGISTRY_NAME}:${K3D_REGISTRY_PORT} \
     --registry-config /workspace/scripts/registries.yaml \
-    --k3s-arg "--disable=traefik@server:0" \
-    --k3s-arg "--snapshotter=native@server:0" \
-    --volume k3d-storage:/var/lib/rancher/k3s@server:0
+    --k3s-arg "--snapshotter=native@server:0"
 }
 
 ensure_loadbalancer_config() {
@@ -157,31 +155,33 @@ ensure_kubeconfig() {
     log "fetching kubeconfig for ${K3D_CLUSTER_NAME}"
     k3d kubeconfig get ${K3D_CLUSTER_NAME} > "$KUBECONFIG"
   fi
-  # Normalize kubeconfig API host to 127.0.0.1 to avoid IPv6 fallbacks.
-  sed -i "s|https://0.0.0.0:${K3D_API_PORT}|https://127.0.0.1:${K3D_API_PORT}|g" "$KUBECONFIG"
-  sed -i "s|https://localhost:${K3D_API_PORT}|https://127.0.0.1:${K3D_API_PORT}|g" "$KUBECONFIG"
-
-  # For bootstrap access, use the server IP:6443 (covered by the cert SANs).
-  local server_ip
-  server_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-server-0" 2>/dev/null || true)
-  if [ -n "$server_ip" ]; then
-    sed -i "s|https://127.0.0.1:${K3D_API_PORT}|https://${server_ip}:6443|g" "$KUBECONFIG"
-    sed -i "s|https://10.88.0.1:${K3D_API_PORT}|https://${server_ip}:6443|g" "$KUBECONFIG"
-  fi
+  # For bootstrap access, use the DNS name which is stable
+  # IP addresses can change in Podman, but DNS name k3d-${K3D_CLUSTER_NAME}-server-0 is constant
+  local server_host="k3d-${K3D_CLUSTER_NAME}-server-0"
+  
+  log "Using k8s API server at ${server_host}:6443"
+  sed -i "s|https://0.0.0.0:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
+  sed -i "s|https://localhost:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
+  sed -i "s|https://127.0.0.1:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
+  sed -i "s|https://host.containers.internal:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
+  sed -i "s|https://10.88.0.1:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
+  # Clean up regex artifacts if any
+  sed -i "s|https://:6443|https://${server_host}:6443|g" "$KUBECONFIG"
 }
 
 wait_for_k8s_api() {
   local attempts=0
-  until kubectl --request-timeout=5s get nodes >/dev/null 2>&1; do
+  until kubectl --insecure-skip-tls-verify --request-timeout=5s get nodes > /dev/null 2>&1; do
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 30 ]; then
       log "k8s API is still unavailable after ${attempts} attempts"
-      kubectl get nodes || true
+      kubectl --insecure-skip-tls-verify get nodes || true
       return 1
     fi
-    log "waiting for k8s API on localhost:${K3D_API_PORT} (attempt ${attempts})..."
+    log "waiting for k8s API (attempt ${attempts})..."
     sleep 3
   done
+  log "k8s API is ready"
 }
 
 install_argocd() {
