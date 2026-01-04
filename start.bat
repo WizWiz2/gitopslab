@@ -86,7 +86,7 @@ if !errorlevel! equ 0 (
         podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
     )
 
-    if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.88.0.1"
+    if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.89.0.1"
     set "PODMAN_SERVICE_PORT=2375"
     set "DOCKER_HOST=tcp://!PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT!"
     set "PODMAN_DOCKER_HOST=!DOCKER_HOST!"

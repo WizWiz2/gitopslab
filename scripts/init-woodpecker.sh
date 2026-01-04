@@ -32,25 +32,7 @@ get_woodpecker_token() {
     local exp
     exp=$(date +%s)
     exp=$((exp + 3600))
-    docker run --rm -e USER_ID="$user_id" -e USER_HASH="$user_hash" -e EXP="$exp" python:3.11-alpine python - <<'PY'
-import os, json, base64, hmac, hashlib
-
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-user_id = os.environ["USER_ID"]
-user_hash = os.environ["USER_HASH"].encode()
-exp = int(os.environ["EXP"])
-
-header = {"alg": "HS256", "typ": "JWT"}
-payload = {"user-id": user_id, "type": "user", "exp": exp}
-
-header_b64 = b64url(json.dumps(header, separators=(",", ":")).encode())
-payload_b64 = b64url(json.dumps(payload, separators=(",", ":")).encode())
-msg = f"{header_b64}.{payload_b64}"
-sig = hmac.new(user_hash, msg.encode(), hashlib.sha256).digest()
-print(f"{msg}.{b64url(sig)}")
-PY
+    docker run --rm -e USER_ID="$user_id" -e USER_HASH="$user_hash" -e EXP="$exp" python:3.11-alpine python -c "import os, json, base64, hmac, hashlib; b64url = lambda d: base64.urlsafe_b64encode(d).rstrip(b'=') .decode(); user_id = os.environ['USER_ID']; user_hash = os.environ['USER_HASH'].encode(); exp = int(os.environ['EXP']); header = {'alg': 'HS256', 'typ': 'JWT'}; payload = {'user-id': user_id, 'type': 'user', 'exp': exp}; header_b64 = b64url(json.dumps(header, separators=(',', ':')).encode()); payload_b64 = b64url(json.dumps(payload, separators=(',', ':')).encode()); msg = f'{header_b64}.{payload_b64}'; sig = hmac.new(user_hash, msg.encode(), hashlib.sha256).digest(); print(f'{msg}.{b64url(sig)}')"
 }
 
 user_row=$(woodpecker_sql "select id,hash from users where login='${REPO_OWNER}' limit 1;" | tr -d '\r' || true)

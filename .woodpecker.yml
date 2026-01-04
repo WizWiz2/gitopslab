@@ -50,7 +50,7 @@ steps:
   build:
     image: docker:24.0-cli
     environment:
-      DOCKER_HOST: tcp://10.88.0.1:2375
+      DOCKER_HOST: tcp://10.89.0.1:2375
     commands:
       - *skip_ci
       - docker build -t registry.localhost:5002/hello-api:${CI_COMMIT_SHA} -f hello-api/Dockerfile hello-api
