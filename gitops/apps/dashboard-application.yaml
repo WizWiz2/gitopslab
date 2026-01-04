@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: http://gitea.argocd.svc.cluster.local:3000/gitops/platform.git
+    repoURL: http://10.89.0.1:3000/gitops/platform.git
     targetRevision: HEAD
     path: gitops/apps/dashboard
   destination:
