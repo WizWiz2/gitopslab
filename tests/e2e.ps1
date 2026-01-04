@@ -10,9 +10,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 
-$repoRoot = Split-Path -Parent $PSCommandPath
-$envPath = Join-Path (Join-Path $repoRoot "..") ".env"
-if (-not (Test-Path $envPath)) { throw ".env file not found: $envPath" }
+$repoRoot = Split-Path -Parent (Resolve-Path $PSCommandPath)
+$envPath = Join-Path (Split-Path -Parent $repoRoot) ".env"
+if (-not (Test-Path $envPath)) { throw ".env file not found at $envPath (repoRoot was $repoRoot)" }
 
 # Load .env
 $envVars = @{}
