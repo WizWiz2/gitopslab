@@ -31,7 +31,6 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - default
       - k3d
 
   registry:
@@ -48,7 +47,6 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - default
       - k3d
 
   woodpecker-server:
@@ -83,7 +81,6 @@ services:
     volumes:
       - woodpecker-data:/var/lib/woodpecker
     networks:
-      - default
       - k3d
 
   woodpecker-agent:
@@ -98,7 +95,7 @@ services:
       - WOODPECKER_SERVER=woodpecker-server:9000
       - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
       - WOODPECKER_BACKEND=docker
-      - WOODPECKER_BACKEND_DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_default
+      - WOODPECKER_BACKEND_DOCKER_NETWORK=k3d
       - DOCKER_HOST=${PODMAN_DOCKER_HOST}
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
@@ -110,7 +107,6 @@ services:
       - "minio.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
       - "mlflow.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
     networks:
-      - default
       - k3d
 
   bootstrap:
@@ -136,9 +132,11 @@ services:
     environment:
       - BOOTSTRAP_TRACE=true
       - DOCKER_HOST=${PODMAN_DOCKER_HOST:-tcp://10.89.0.1:2375}
+      - K3D_NETWORK=k3d
     entrypoint: [ "/workspace/scripts/bootstrap.sh" ]
     extra_hosts:
       - "registry.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
+      - "gitea.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
     networks:
       - k3d
 
@@ -149,7 +147,6 @@ volumes:
 
 
 networks:
-  default: {}
   k3d:
     external: true
     name: k3d

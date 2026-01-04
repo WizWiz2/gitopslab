@@ -1,6 +1,18 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+REM Parse arguments
+set "CLEAN_MODE=0"
+if /i "%1"=="--clean" set "CLEAN_MODE=1"
+if /i "%1"=="-c" set "CLEAN_MODE=1"
+
+if "%CLEAN_MODE%"=="1" (
+    echo [Stop] Running in CLEAN mode - will remove all data
+) else (
+    echo [Stop] Running in SOFT mode - preserving data
+    echo [Stop] Use 'stop.bat --clean' for full cleanup
+)
+
 echo [Stop] Preparing Docker/Podman environment...
 
 set "CTR_BIN="
@@ -87,8 +99,43 @@ for %%N in (platform-bootstrap woodpecker-server woodpecker-agent gitea registry
     %CTR_BIN% rm %%N >nul 2>&1
 )
 
-echo [Stop] Stopping k3d containers...
-for /f %%I in ('%CTR_BIN% ps -a -q --filter "name=k3d-"') do %CTR_BIN% stop %%I >nul 2>&1
+echo [Stop] Stopping k3d cluster...
+REM Stop k3d cluster properly
+k3d cluster delete gitopslab >nul 2>&1
+
+echo [Stop] Stopping remaining k3d containers...
+for /f %%I in ('%CTR_BIN% ps -a -q --filter "name=k3d-"') do (
+    %CTR_BIN% stop %%I >nul 2>&1
+    %CTR_BIN% rm %%I >nul 2>&1
+)
+
+if "%CLEAN_MODE%"=="1" (
+    echo [Stop] CLEAN MODE: Removing volumes...
+    
+    REM Remove project volumes
+    for %%V in (gitopslab_gitea-data gitopslab_woodpecker-data gitopslab_registry-data) do (
+        %CTR_BIN% volume rm %%V >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo [Stop]   Removed volume %%V
+        )
+    )
+    
+    REM Remove k3d volumes
+    for /f %%V in ('%CTR_BIN% volume ls -q --filter "name=k3d-gitopslab"') do (
+        %CTR_BIN% volume rm %%V >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo [Stop]   Removed volume %%V
+        )
+    )
+    
+    echo [Stop] CLEAN MODE: Removing k3d network...
+    %CTR_BIN% network rm k3d >nul 2>&1
+    
+    echo [Stop] CLEAN MODE: Complete - system reset to initial state
+) else (
+    echo [Stop] SOFT MODE: Volumes and data preserved
+    echo [Stop] Run 'stop.bat --clean' to remove all data
+)
 
 echo [Stop] Done.
 

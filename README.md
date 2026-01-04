@@ -26,13 +26,42 @@ Just run `start.bat`. It will create the configuration file, download a local Do
 - Demo app: http://demo.localhost:8088
 - ML Predict: http://demo.localhost:8088/predict
 
-### Reset
+### Lifecycle Management
 
-Stop and remove everything, including volumes:
-
-```bash
-docker compose down -v
+**Start Platform:**
+```batch
+start.bat
 ```
+
+**Stop Platform (preserve data):**
+```batch
+stop.bat
+```
+
+**Stop Platform (full cleanup):**
+```batch
+stop.bat --clean
+```
+
+**Quick Restart (full cleanup + start):**
+```batch
+restart.bat
+```
+
+**Health Checks:**
+```batch
+health-check.bat smoke    # Quick validation
+health-check.bat full     # Comprehensive check
+```
+
+**E2E Tests:**
+```batch
+run-e2e.bat
+```
+
+📚 **See [docs/LIFECYCLE.md](docs/LIFECYCLE.md) for detailed lifecycle management guide**  
+🏥 **See [docs/HEALTH_CHECKS.md](docs/HEALTH_CHECKS.md) for health check system documentation**
+
 
 ### Podman Support
 

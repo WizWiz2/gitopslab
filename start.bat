@@ -14,6 +14,29 @@ if exist "scripts\preflight-check.bat" (
     )
 )
 
+REM Check for dirty state (k3d cluster exists but compose services stopped)
+podman ps -a --filter "name=k3d-gitopslab-server" --format "{{.Names}}" | findstr /C:"k3d-gitopslab-server" >nul 2>&1
+if !errorlevel! equ 0 (
+    podman ps --filter "name=gitea" --format "{{.Names}}" | findstr /C:"gitea" >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo.
+        echo [Start] WARNING: Detected inconsistent state!
+        echo [Start] k3d cluster exists but platform services are stopped.
+        echo [Start] This may cause issues with ArgoCD cache and OAuth.
+        echo.
+        echo [Start] Recommended actions:
+        echo [Start]   1. Run 'stop.bat --clean' for full cleanup
+        echo [Start]   2. Then run 'start.bat' again
+        echo.
+        choice /C YN /M "Continue anyway? (Not recommended)"
+        if !errorlevel! neq 1 (
+            echo [Start] Aborted by user.
+            exit /b 1
+        )
+    )
+)
+
+
 if not exist .env (
     echo [Start] .env not found. Creating from .env.example...
     copy .env.example .env >nul
@@ -96,7 +119,7 @@ if !errorlevel! equ 0 (
         podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
     )
 
-    if "!PODMAN_GATEWAY!"=="" set "PODMAN_GATEWAY=10.89.0.1"
+    set "PODMAN_GATEWAY=10.89.0.1"
     set "PODMAN_SERVICE_PORT=2375"
     set "DOCKER_HOST=tcp://!PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT!"
     set "PODMAN_DOCKER_HOST=!DOCKER_HOST!"
