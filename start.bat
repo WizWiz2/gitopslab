@@ -4,6 +4,16 @@ set "MSYS_NO_PATHCONV=1"
 
 echo [Start] Checking environment...
 
+REM Run pre-flight checks
+if exist "scripts\preflight-check.bat" (
+    call scripts\preflight-check.bat
+    if errorlevel 1 (
+        echo [Start] Pre-flight checks failed. Please fix errors before continuing.
+        pause
+        exit /b 1
+    )
+)
+
 if not exist .env (
     echo [Start] .env not found. Creating from .env.example...
     copy .env.example .env >nul

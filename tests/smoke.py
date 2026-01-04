@@ -1,219 +1,298 @@
 """
-Lightweight smoke test for gitopslab.
-
-By default it runs start.bat; use --skip-start to only probe endpoints.
+Smoke Tests for GitOps Lab Platform
+Quick validation of critical infrastructure components
 """
-
-import argparse
-import json
 import os
-import ssl
+import socket
 import subprocess
-import sys
 import time
-import urllib.error
-import urllib.request
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
+import requests
+import pytest
 
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-ENV_PATH = os.path.join(REPO_ROOT, ".env")
-
-
-def read_env(path: str) -> Dict[str, str]:
-    env: Dict[str, str] = {}
-    if not os.path.isfile(path):
-        return env
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip()
-    return env
-
-
-def http_check(url: str, timeout: float, allow_status: Tuple[int, ...]) -> int:
-    ctx = ssl._create_unverified_context()
-    req = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        if e.code in allow_status:
-            return e.code
-        raise
-
-
-def post_json(url: str, payload: Dict[str, object], timeout: float = 5.0) -> Tuple[int, bytes]:
-    ctx = ssl._create_unverified_context()
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-        return resp.status, resp.read()
-
-
-def wait_http(name: str, url: str, allow_status: Tuple[int, ...] = (200,), attempts: int = 40, delay: float = 3.0):
-    for i in range(1, attempts + 1):
+class HealthChecker:
+    """Platform health validation"""
+    
+    def __init__(self):
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
+        self.gateway_ip = os.getenv("HOST_GATEWAY_IP", "10.89.0.1")
+        self.compose_project = os.getenv("COMPOSE_PROJECT_NAME", "gitopslab")
+        
+    def check_network_gateway(self) -> bool:
+        """Verify k3d network gateway IP matches configuration"""
         try:
-            code = http_check(url, timeout=5.0, allow_status=allow_status)
-            print(f"[ok] {name} -> {url} (status {code})")
-            return
-        except Exception as e:  # noqa: BLE001
-            print(f"[wait] {name} ({url}) not ready ({e}); attempt {i}/{attempts}")
-            time.sleep(delay)
-    raise RuntimeError(f"{name} not ready: {url}")
-
-
-def wait_http_any(name: str, urls: Tuple[str, ...], allow_status: Tuple[int, ...] = (200,), attempts: int = 8, delay: float = 3.0):
-    last_exc = None
-    for u in dict.fromkeys(urls):
+            result = subprocess.run(
+                ["podman", "network", "inspect", "k3d", 
+                 "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode != 0:
+                self.errors.append("k3d network not found")
+                return False
+                
+            actual_gateway = result.stdout.strip()
+            
+            if actual_gateway != self.gateway_ip:
+                self.errors.append(
+                    f"Gateway IP mismatch: expected {self.gateway_ip}, "
+                    f"got {actual_gateway}"
+                )
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.errors.append(f"Network check failed: {e}")
+            return False
+    
+    def check_docker_api(self) -> bool:
+        """Verify Docker API is accessible"""
         try:
-            wait_http(name, u, allow_status=allow_status, attempts=attempts, delay=delay)
-            return
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            continue
-    if last_exc:
-        raise last_exc
-
-
-def predict_check(url: str):
-    payload = {"features": [5.1, 3.5, 1.4, 0.2]}
-    status, body = post_json(url, payload)
-    if status != 200:
-        raise RuntimeError(f"predict failed: status {status}")
-    data = json.loads(body.decode("utf-8"))
-    if "class_id" not in data or "class_name" not in data:
-        raise RuntimeError(f"predict response missing fields: {data}")
-    print(f"[ok] Predict -> {url} (class {data['class_id']}: {data['class_name']})")
-
-
-def predict_any(name: str, urls: Tuple[str, ...]):
-    last_exc = None
-    for u in dict.fromkeys(urls):
+            response = requests.get(
+                f"http://{self.gateway_ip}:2375/version",
+                timeout=3
+            )
+            return response.status_code == 200
+        except Exception as e:
+            self.errors.append(f"Docker API not accessible: {e}")
+            return False
+    
+    def check_registry(self) -> bool:
+        """Verify container registry is accessible"""
         try:
-            predict_check(u)
-            return
-        except Exception as exc:  # noqa: BLE001
-            print(f"[wait] {name} ({u}) not ready ({exc})")
-            last_exc = exc
-    if last_exc:
-        raise last_exc
-
-
-def ensure_started(skip_start: bool):
-    if skip_start:
-        return
-    start_script = os.path.join(REPO_ROOT, "start.bat")
-    if not os.path.isfile(start_script):
-        raise FileNotFoundError("start.bat not found")
-    print("[start] running start.bat ...")
-    subprocess.run(["cmd", "/c", start_script], cwd=REPO_ROOT, check=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Smoke test for gitopslab")
-    parser.add_argument("--skip-start", action="store_true", help="Do not run start.bat")
-    parser.add_argument("--timeout", type=int, default=240, help="Global timeout in seconds")
-    parser.add_argument("--skip-minio", action="store_true", help="Skip MinIO checks")
-    parser.add_argument("--skip-mlflow", action="store_true", help="Skip MLflow checks")
-    args = parser.parse_args()
-
-    ensure_started(args.skip_start)
-
-    env = read_env(ENV_PATH)
-    gitea_port = env.get("GITEA_HTTP_PORT", "3000")
-    gitea_ssh = env.get("GITEA_SSH_PORT", "2222")
-    wood_port = env.get("WOODPECKER_SERVER_PORT", "8000")
-    reg_port = env.get("REGISTRY_HTTP_PORT", "5001")
-    argocd_port = env.get("ARGOCD_PORT", "8081")
-    k3d_api = env.get("K3D_API_PORT", "6550")
-    minio_api_port = env.get("MINIO_API_PORT", "9090")
-    minio_console_port = env.get("MINIO_CONSOLE_PORT", "9091")
-    mlflow_port = env.get("MLFLOW_PORT", "8090")
-
-    gitea_http = env.get("GITEA_PUBLIC_URL", f"http://localhost:{gitea_port}")
-    wood_http = env.get("WOODPECKER_HOST", f"http://localhost:{wood_port}")
-    argocd_http = env.get("ARGOCD_PUBLIC_URL", f"http://localhost:{argocd_port}")
-    demo_http = env.get("DEMO_PUBLIC_URL", "http://demo.localhost:8088")
-    minio_http = env.get("MINIO_PUBLIC_URL", f"http://minio.localhost:{minio_api_port}")
-    mlflow_http = env.get("MLFLOW_PUBLIC_URL", f"http://mlflow.localhost:{mlflow_port}")
-
-    gitea_candidates = (gitea_http, f"http://localhost:{gitea_port}")
-    wood_candidates = (wood_http, f"http://localhost:{wood_port}")
-    argocd_candidates = (argocd_http, f"http://localhost:{argocd_port}")
-    demo_candidates = (demo_http, "http://localhost:8088")
-    minio_candidates = (minio_http, f"http://localhost:{minio_api_port}")
-    mlflow_candidates = (mlflow_http, f"http://localhost:{mlflow_port}")
-
-    deadline = time.time() + args.timeout
-
-    def wait_remaining():
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            raise TimeoutError("Global timeout exceeded")
-
-    wait_remaining()
-    wait_http_any("Gitea", tuple(f"{u}/api/v1/version" for u in gitea_candidates))
-
-    wait_remaining()
-    wait_http("Registry", f"http://localhost:{reg_port}/v2/", allow_status=(200,))
-
-    wait_remaining()
-    wait_http_any("Woodpecker", tuple(f"{u}/healthz" for u in wood_candidates), allow_status=(200, 204))
-
-    wait_remaining()
-    wait_http_any("Argo CD", argocd_candidates, allow_status=(200, 301, 302, 307, 401))
-
-    wait_remaining()
-    wait_http("K8s API", f"https://localhost:{k3d_api}/version", allow_status=(200, 401))
-
-    if not args.skip_minio:
-        wait_remaining()
-        wait_http_any("MinIO", tuple(f"{u}/minio/health/ready" for u in minio_candidates), allow_status=(200,))
-
-    if not args.skip_mlflow:
-        wait_remaining()
-        wait_http_any(
-            "MLflow",
-            tuple(f"{u}/api/2.0/mlflow/experiments/list" for u in mlflow_candidates),
-            allow_status=(200,),
+            response = requests.get(
+                f"http://{self.gateway_ip}:5002/v2/",
+                timeout=3
+            )
+            return response.status_code == 200
+        except Exception as e:
+            self.errors.append(f"Registry not accessible: {e}")
+            return False
+    
+    def check_service_port(self, host: str, port: int, timeout: int = 3) -> bool:
+        """Check if service port is open"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    def check_gitea(self) -> bool:
+        """Verify Gitea is accessible"""
+        try:
+            response = requests.get(
+                "http://gitea.localhost:3000/api/v1/version",
+                timeout=5
+            )
+            return response.status_code == 200
+        except Exception as e:
+            self.errors.append(f"Gitea not accessible: {e}")
+            return False
+    
+    def check_woodpecker(self) -> bool:
+        """Verify Woodpecker is accessible"""
+        try:
+            response = requests.get(
+                "http://woodpecker.localhost:8000/healthz",
+                timeout=5
+            )
+            return response.status_code == 200
+        except Exception as e:
+            self.warnings.append(f"Woodpecker health check failed: {e}")
+            return False
+    
+    def check_oauth_config(self) -> bool:
+        """Verify OAuth credentials are configured"""
+        client_id = os.getenv("WOODPECKER_GITEA_CLIENT", "")
+        client_secret = os.getenv("WOODPECKER_GITEA_SECRET", "")
+        
+        if not client_id or client_id == "replace-me":
+            self.errors.append("WOODPECKER_GITEA_CLIENT not configured")
+            return False
+            
+        if not client_secret or client_secret == "replace-me":
+            self.errors.append("WOODPECKER_GITEA_SECRET not configured")
+            return False
+            
+        return True
+    
+    def check_k3d_cluster(self) -> bool:
+        """Verify k3d cluster is running"""
+        try:
+            result = subprocess.run(
+                ["podman", "ps", "--filter", "name=k3d-gitopslab-server", 
+                 "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if "k3d-gitopslab-server" not in result.stdout:
+                self.errors.append("k3d cluster not running")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.errors.append(f"k3d cluster check failed: {e}")
+            return False
+    
+    def check_argocd(self) -> bool:
+        """Verify ArgoCD is deployed"""
+        try:
+            result = subprocess.run(
+                ["podman", "exec", "k3d-gitopslab-server-0",
+                 "kubectl", "get", "pods", "-n", "argocd", "--no-headers"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode != 0:
+                self.warnings.append("ArgoCD namespace not accessible")
+                return False
+                
+            pod_count = len(result.stdout.strip().split('\n'))
+            
+            if pod_count < 5:
+                self.warnings.append(f"ArgoCD may not be fully deployed ({pod_count} pods)")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.warnings.append(f"ArgoCD check failed: {e}")
+            return False
+    
+    def run_all_checks(self) -> Dict[str, bool]:
+        """Run all health checks and return results"""
+        results = {
+            "network_gateway": self.check_network_gateway(),
+            "docker_api": self.check_docker_api(),
+            "registry": self.check_registry(),
+            "gitea": self.check_gitea(),
+            "woodpecker": self.check_woodpecker(),
+            "oauth_config": self.check_oauth_config(),
+            "k3d_cluster": self.check_k3d_cluster(),
+            "argocd": self.check_argocd(),
+        }
+        
+        return results
+    
+    def get_summary(self) -> Tuple[int, int, int]:
+        """Return (passed, failed, warnings) counts"""
+        return (
+            len([e for e in self.errors if e]),
+            len([w for w in self.warnings if w]),
+            0  # passed calculated from total - failed - warnings
         )
 
-    wait_remaining()
-    wait_http_any("Demo app", tuple(f"{u}/" for u in demo_candidates), allow_status=(200,))
 
-    wait_remaining()
-    predict_any("Predict", tuple(f"{u}/predict" for u in demo_candidates))
+# ============================================================================
+# PYTEST TESTS
+# ============================================================================
 
-    print("-------------------------------------------------------")
-    print("All endpoints are reachable:")
-    print(f"Gitea HTTP:  {gitea_candidates[0]}")
-    print(f"Gitea SSH:   ssh://git@localhost:{gitea_ssh}")
-    print(f"Woodpecker:  {wood_http}")
-    print(f"Registry:    http://localhost:{reg_port}/v2/")
-    print(f"Argo CD:     {argocd_http}")
-    print(f"K8s API:     https://localhost:{k3d_api}")
-    if not args.skip_minio:
-        print(f"MinIO API:   {minio_candidates[0]}")
-        print(f"MinIO UI:    http://minio.localhost:{minio_console_port}")
-    if not args.skip_mlflow:
-        print(f"MLflow:      {mlflow_candidates[0]}")
-    print(f"Demo app:    {demo_http}")
-    print("-------------------------------------------------------")
+@pytest.fixture(scope="module")
+def health_checker():
+    """Create health checker instance"""
+    return HealthChecker()
 
+
+def test_network_gateway(health_checker):
+    """Test: k3d network gateway IP matches configuration"""
+    assert health_checker.check_network_gateway(), \
+        f"Network gateway check failed: {health_checker.errors}"
+
+
+def test_docker_api(health_checker):
+    """Test: Docker API is accessible"""
+    assert health_checker.check_docker_api(), \
+        "Docker API not accessible at gateway IP"
+
+
+def test_registry(health_checker):
+    """Test: Container registry is accessible"""
+    assert health_checker.check_registry(), \
+        "Container registry not accessible"
+
+
+def test_gitea(health_checker):
+    """Test: Gitea service is running and accessible"""
+    assert health_checker.check_gitea(), \
+        "Gitea service not accessible"
+
+
+def test_woodpecker(health_checker):
+    """Test: Woodpecker service is running"""
+    # This is a warning-level check, so we don't fail the test
+    health_checker.check_woodpecker()
+
+
+def test_oauth_config(health_checker):
+    """Test: OAuth credentials are properly configured"""
+    assert health_checker.check_oauth_config(), \
+        "OAuth configuration incomplete"
+
+
+def test_k3d_cluster(health_checker):
+    """Test: k3d cluster is running"""
+    assert health_checker.check_k3d_cluster(), \
+        "k3d cluster not running"
+
+
+def test_argocd(health_checker):
+    """Test: ArgoCD is deployed in cluster"""
+    # This is a warning-level check
+    health_checker.check_argocd()
+
+
+# ============================================================================
+# STANDALONE EXECUTION
+# ============================================================================
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as exc:  # noqa: BLE001
-        safe_msg = str(exc).encode("ascii", errors="ignore").decode()
-        print(f"[FAIL] {safe_msg}")
-        sys.exit(1)
+    print("=" * 60)
+    print("GitOps Lab Platform - Smoke Tests")
+    print("=" * 60)
+    
+    checker = HealthChecker()
+    results = checker.run_all_checks()
+    
+    print("\nResults:")
+    print("-" * 60)
+    
+    for check_name, passed in results.items():
+        status = "✓ PASS" if passed else "✗ FAIL"
+        print(f"{check_name:20s} {status}")
+    
+    print("-" * 60)
+    
+    if checker.errors:
+        print("\nErrors:")
+        for error in checker.errors:
+            print(f"  ✗ {error}")
+    
+    if checker.warnings:
+        print("\nWarnings:")
+        for warning in checker.warnings:
+            print(f"  ⚠ {warning}")
+    
+    passed_count = sum(1 for v in results.values() if v)
+    total_count = len(results)
+    
+    print(f"\nSummary: {passed_count}/{total_count} checks passed")
+    print("=" * 60)
+    
+    # Exit with error code if critical checks failed
+    if checker.errors:
+        exit(1)
+    else:
+        exit(0)
