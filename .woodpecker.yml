@@ -25,7 +25,7 @@ steps:
   train-model:
     image: python:3.10-slim
     environment:
-      MLFLOW_TRACKING_URI: http://host.containers.internal:8090
+      MLFLOW_TRACKING_URI: http://10.89.0.1:8090
       MLFLOW_EXPERIMENT_NAME: hello-api-training
     commands:
       - *skip_ci
@@ -36,7 +36,7 @@ steps:
   upload-model:
     image: minio/mc:latest
     environment:
-      MINIO_ENDPOINT: http://host.containers.internal:9090
+      MINIO_ENDPOINT: http://10.89.0.1:9090
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     commands:
@@ -65,7 +65,7 @@ steps:
       TRIVY_SKIP_DB_UPDATE: "true"
     commands:
       - *skip_ci
-      - trivy image --exit-code 0 --severity HIGH,CRITICAL --scanners vuln --insecure host.containers.internal:5002/hello-api:${CI_COMMIT_SHA} || echo "trivy skipped (offline)"
+      - trivy image --exit-code 0 --severity HIGH,CRITICAL --scanners vuln --insecure 10.89.0.1:5002/hello-api:${CI_COMMIT_SHA} || echo "trivy skipped (offline)"
     when:
       status: [success]
 
