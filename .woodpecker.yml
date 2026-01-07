@@ -27,7 +27,7 @@ steps:
     extra_hosts:
       - "mlflow.localhost:10.89.0.1"
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow.localhost:8091
+      MLFLOW_TRACKING_URI: http://mlflow.localhost:8090
       MLFLOW_EXPERIMENT_NAME: hello-api-training
     commands:
       - *skip_ci
