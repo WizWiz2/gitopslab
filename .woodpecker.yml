@@ -25,7 +25,7 @@ steps:
   train-model:
     image: python:3.10-slim
     environment:
-      MLFLOW_TRACKING_URI: http://10.89.0.1:8090
+      MLFLOW_TRACKING_URI: http://10.89.0.1:30902
       MLFLOW_EXPERIMENT_NAME: hello-api-training
     commands:
       - *skip_ci
