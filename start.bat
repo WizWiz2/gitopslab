@@ -2,291 +2,475 @@
 setlocal EnableDelayedExpansion
 set "MSYS_NO_PATHCONV=1"
 
-echo [Start] Checking environment...
+REM ============================================================================
+REM PHASE 0: Environment Check (NO Podman commands)
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 0: Environment Check
+echo ========================================
 
-REM Run pre-flight checks
-if exist "scripts\preflight-check.bat" (
-    call scripts\preflight-check.bat
-    if errorlevel 1 (
-        echo [Start] Pre-flight checks failed. Please fix errors before continuing.
-        pause
-        exit /b 1
-    )
+REM Check Podman CLI availability
+where podman >nul 2>nul
+if !errorlevel! neq 0 (
+    echo [ERROR] Podman not found
+    echo [FIX] Install from: https://podman.io
+    pause
+    exit /b 1
 )
+echo [Start] √ Podman CLI found
 
-REM Check for dirty state (k3d cluster exists but compose services stopped)
-podman ps -a --filter "name=k3d-gitopslab-server" --format "{{.Names}}" | findstr /C:"k3d-gitopslab-server" >nul 2>&1
-if !errorlevel! equ 0 (
-    podman ps --filter "name=gitea" --format "{{.Names}}" | findstr /C:"gitea" >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo.
-        echo [Start] WARNING: Detected inconsistent state!
-        echo [Start] k3d cluster exists but platform services are stopped.
-        echo [Start] This may cause issues with ArgoCD cache and OAuth.
-        echo.
-        echo [Start] Recommended actions:
-        echo [Start]   1. Run 'stop.bat --clean' for full cleanup
-        echo [Start]   2. Then run 'start.bat' again
-        echo.
-        choice /C YN /M "Continue anyway? (Not recommended)"
-        if !errorlevel! neq 1 (
-            echo [Start] Aborted by user.
-            exit /b 1
-        )
-    )
-)
-
-
+REM Check .env file
 if not exist .env (
-    echo [Start] .env not found. Creating from .env.example...
-    copy .env.example .env >nul
-    if !errorlevel! neq 0 (
-        echo [Error] Failed to create .env
+    if not exist .env.example (
+        echo [ERROR] .env.example not found
         pause
         exit /b 1
     )
+    echo [Start] Creating .env from .env.example...
+    copy .env.example .env >nul
 )
+echo [Start] √ .env file exists
 
-REM Load .env values (skip commented lines)
+REM Load .env values
 for /f "usebackq eol=# tokens=1,2 delims==" %%A in (.env) do (
     if not "%%~A"=="" set "%%A=%%B"
 )
 
-REM Ensure ssh-keygen is available (required by podman machine init)
+REM Check SSH tools
 where ssh-keygen >nul 2>nul
 if !errorlevel! neq 0 (
-    echo [Start] ssh-keygen not found in PATH. Adding common locations...
+    echo [Start] Adding SSH tools to PATH...
     set "PATH=C:\Windows\System32\OpenSSH;!PATH!"
     set "PATH=C:\Program Files\Git\usr\bin;!PATH!"
-    set "PATH=C:\Program Files ^(x86^)\Git\usr\bin;!PATH!"
 )
-where ssh-keygen >nul 2>nul
+
+echo [Start] √ Environment OK
+
+REM ============================================================================
+REM PHASE 1: Podman Machine (Idempotent)
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 1: Podman Machine
+echo ========================================
+
+REM Check if machine exists using podman machine list
+podman machine list 2>nul | findstr /C:"podman-machine-default" >nul 2>nul
 if !errorlevel! neq 0 (
-    echo [Error] ssh-keygen not found. Please install OpenSSH or Git for Windows.
-    pause
-    exit /b 1
-)
-where ssh >nul 2>nul
-if !errorlevel! neq 0 (
-    echo [Error] ssh not found. Please install OpenSSH or Git for Windows.
-    pause
-    exit /b 1
-)
-
-REM Avoid creating NUL known_hosts files when Podman uses ssh
-set "SSH_WRAPPER_DIR=%~dp0scripts\bin"
-if exist "%SSH_WRAPPER_DIR%\ssh.cmd" (
-    set "PATH=%SSH_WRAPPER_DIR%;!PATH!"
-)
-
-echo [Start] Detecting container runtime...
-
-REM Check for Podman
-where podman >nul 2>nul
-if !errorlevel! equ 0 (
-    echo [Start] Podman found.
-    
-    echo [Start] Checking Podman status...
-    podman info >nul 2>nul
+    echo [Start] No Podman machine found. Creating...
+    podman machine init --cpus 4 --memory 8192 --rootful --now
     if !errorlevel! neq 0 (
-        echo [Start] Podman machine seems to be stopped or missing. Attempting to start...
-        podman machine start >nul 2>nul
-        if !errorlevel! neq 0 (
-            echo [Start] Start failed. Attempting to initialize new Podman machine with more resources...
-            REM Remove old machine if exists (failed start usually means broken or old config)
-            podman machine rm -f >nul 2>nul
-            
-            REM Initialize with explicit resources: 4 CPUs, 8GB RAM, 50GB Disk
-            podman machine init --cpus 4 --memory 8192 --disk-size 50
-            
-            if !errorlevel! neq 0 (
-                echo [Error] Failed to initialize Podman machine. Please install WSL2 and Podman correctly.
-                pause
-                exit /b 1
-            )
-            echo [Start] Machine initialized. Starting...
-            podman machine start
-            if !errorlevel! neq 0 (
-                 echo [Error] Failed to start Podman machine after init.
-                 pause
-                 exit /b 1
-            )
-        )
-        echo [Start] Fixing DNS in Podman machine...
-        podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
-    ) else (
-        echo [Start] Ensuring DNS is fixed in Podman machine...
-        podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf"
-    )
-
-    set "PODMAN_GATEWAY=10.89.0.1"
-    set "PODMAN_SERVICE_PORT=2375"
-    set "DOCKER_HOST=tcp://!PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT!"
-    set "PODMAN_DOCKER_HOST=!DOCKER_HOST!"
-    echo [Start] Configuring Podman VM registry access...
-    set "HOSTS_NAMES=registry.localhost gitea.localhost woodpecker.localhost argocd.localhost demo.localhost mlflow.localhost minio.localhost apps.localhost k8s.localhost dashboard.localhost"
-    set "HOSTS_PATTERN=registry\.localhost|gitea\.localhost|woodpecker\.localhost|argocd\.localhost|demo\.localhost|mlflow\.localhost|minio\.localhost|apps\.localhost|k8s\.localhost|dashboard\.localhost"
-    podman machine ssh -- "grep -v -E '!HOSTS_PATTERN!' /etc/hosts > /tmp/hosts && printf '!PODMAN_GATEWAY! !HOSTS_NAMES!\n' >> /tmp/hosts && cat /tmp/hosts | sudo tee /etc/hosts > /dev/null"
-    podman machine ssh -- "grep -q 'registry.localhost:5002' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' | sudo tee -a /etc/containers/registries.conf > /dev/null"
-    podman machine ssh -- "pkill -f 'podman system service' || true"
-    echo [Start] Ensuring Podman API service on !PODMAN_GATEWAY!:!PODMAN_SERVICE_PORT! ...
-    podman machine ssh -- "systemd-run --user --unit=podman-tcp --remain-after-exit podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1" || podman machine ssh -- "nohup podman system service --time=0 tcp://0.0.0.0:!PODMAN_SERVICE_PORT! >/tmp/podman-system-service.log 2>&1 &"
-    if !errorlevel! neq 0 (
-        echo [Error] Failed to start Podman API service inside the VM.
+        echo [ERROR] Failed to create Podman machine
+        echo [FIX] Check WSL2 installation: wsl --status
         pause
         exit /b 1
     )
-    
-    REM Create k3d network with DNS enabled (required for k3d clusters)
-    echo [Start] Creating k3d network with DNS...
-    podman network exists k3d >nul 2>nul
-    if !errorlevel! neq 0 (
-        podman network create k3d
-        if !errorlevel! neq 0 (
-            echo [Error] Failed to create k3d network.
-            pause
-            exit /b 1
-        )
-    ) else (
-        echo [Start] k3d network already exists
-    )
-
-    REM Prefer podman-compose; podman compose falls back to docker-compose and breaks on Windows here
-    set "COMPOSE_BIN="
-    set "COMPOSE_ARGS="
-    set "COMPOSE_LABEL="
-    podman-compose --version >nul 2>nul
-    if !errorlevel! equ 0 (
-        set "COMPOSE_BIN=podman-compose"
-        set "COMPOSE_LABEL=podman-compose"
-    ) else (
-        set "PY_LAUNCHER="
-        for /f "usebackq delims=" %%P in (`where py 2^>nul`) do (
-            if "!PY_LAUNCHER!"=="" set "PY_LAUNCHER=%%P"
-        )
-        if "!PY_LAUNCHER!"=="" (
-            echo [Error] Python launcher py.exe not found. Required for podman-compose.
-            pause
-            exit /b 1
-        )
-        set "PY_VERSION="
-        for %%V in (3.12 3.11) do (
-            if "!PY_VERSION!"=="" (
-                "!PY_LAUNCHER!" -%%V -c "import sys" >nul 2>nul
-                if !errorlevel! equ 0 set "PY_VERSION=%%V"
-            )
-        )
-        if "!PY_VERSION!"=="" (
-            echo [Error] Python 3.11+ not found. Install Python 3.11 or 3.12 for podman-compose.
-            pause
-            exit /b 1
-        )
-        "!PY_LAUNCHER!" -!PY_VERSION! -m pip --version >nul 2>nul
-        if !errorlevel! neq 0 (
-            "!PY_LAUNCHER!" -!PY_VERSION! -m ensurepip --upgrade >nul 2>nul
-        )
-        "!PY_LAUNCHER!" -!PY_VERSION! -m pip show podman-compose >nul 2>nul
-        if !errorlevel! neq 0 (
-            echo [Start] Installing podman-compose for Python !PY_VERSION!...
-            "!PY_LAUNCHER!" -!PY_VERSION! -m pip install --user podman-compose
-            if !errorlevel! neq 0 (
-                echo [Error] Failed to install podman-compose for Python !PY_VERSION!.
-                pause
-                exit /b 1
-            )
-        )
-        set "COMPOSE_BIN=!PY_LAUNCHER!"
-        set "COMPOSE_ARGS=-!PY_VERSION! -m podman_compose"
-        set "COMPOSE_LABEL=podman-compose py !PY_VERSION!"
-    )
-    set "CONTAINER_HOST="
-    set "PODMAN_HOST="
-    set "COMPOSE_CONVERT_WINDOWS_PATHS=0"
-    echo [Start] Using !COMPOSE_LABEL!
-    goto :run
+    echo [Start] √ Podman machine created
+    goto :machine_ready
 )
 
-REM Check for Docker
-where docker >nul 2>nul
-if !errorlevel! equ 0 (
-    echo [Start] Docker found.
-    set "COMPOSE_CMD=docker compose"
-    REM If Podman socket exists, point docker client to it as an optional fallback
-    if exist "\\\\.\\pipe\\podman-machine-default" (
-        set "DOCKER_HOST=npipe:////./pipe/podman-machine-default"
-    )
-    goto :run
-)
-
-echo [Error] Neither Docker nor Podman found. Please install one of them.
-pause
-exit /b 1
-
-:run
-if not "%COMPOSE_BIN%"=="" (
-    echo [Start] cleaning up old bootstrap...
-    podman rm -f platform-bootstrap >nul 2>&1
-    echo [Start] Starting services with !COMPOSE_BIN! !COMPOSE_ARGS!...
-    "!COMPOSE_BIN!" !COMPOSE_ARGS! up -d --remove-orphans --force-recreate
-) else (
-    echo [Start] Starting services with !COMPOSE_CMD!...
-    !COMPOSE_CMD! up -d
-)
+echo [Start] Machine found. Checking if running...
+REM Check if machine is running
+podman machine list | findstr /C:"Currently running" >nul 2>nul
 if !errorlevel! neq 0 (
-    echo [Error] Failed to start services.
+    echo [Start] Machine stopped. Starting...
+    podman machine start
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to start machine
+        echo [FIX] Try: podman machine rm -f, then run start.bat again
+        pause
+        exit /b 1
+    )
+)
+
+:machine_ready
+echo [Start] √ Podman machine running
+
+REM ============================================================================
+REM PHASE 2: Verify Podman API (Fail-Fast)
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 2: Verifying Podman API
+echo ========================================
+
+podman ps >nul 2>nul
+if !errorlevel! neq 0 (
+    echo [ERROR] Podman API not responding
+    echo [ERROR] This means API forwarding is broken
+    echo.
+    echo [FIX] Run these commands:
+    echo   1. wsl --terminate podman-machine-default
+    echo   2. podman machine rm -f
+    echo   3. start.bat
+    echo.
     pause
     exit /b 1
 )
 
-REM Detect container CLI for follow-up commands (token, kubeconfig)
-set "CTR_BIN=podman"
-where podman >nul 2>nul
+echo [Start] √ Podman API working
+
+REM ============================================================================
+REM PHASE 3: Configure Podman Machine
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 3: Configuring Machine
+echo ========================================
+
+REM Fix DNS
+echo [Start] Configuring DNS...
+podman machine ssh -- "echo 'nameserver 8.8.8.8' | sudo tee /etc/resolv.conf" >nul 2>nul
+
+REM Auto-detect k3d network gateway
+for /f "tokens=*" %%i in ('podman network inspect k3d --format "{{range .IPAM.Config}}{{.Gateway}}{{end}}" 2^>nul') do set "PODMAN_GATEWAY=%%i"
+if "!PODMAN_GATEWAY!"=="" (
+    set "PODMAN_GATEWAY=10.89.0.1"
+    echo [Start] Using default gateway: 10.89.0.1
+) else (
+    echo [Start] Detected gateway: !PODMAN_GATEWAY!
+)
+
+REM Update HOST_GATEWAY_IP in .env
+powershell -NoProfile -Command "(Get-Content .env) -replace '^HOST_GATEWAY_IP=.*', 'HOST_GATEWAY_IP=!PODMAN_GATEWAY!' | Set-Content .env" >nul
+
+REM Configure /etc/hosts in VM
+set "HOSTS_NAMES=registry registry.localhost k3d-registry.localhost gitea.localhost woodpecker.localhost argocd.localhost demo.localhost mlflow.localhost minio.localhost apps.localhost k8s.localhost dashboard.localhost"
+set "HOSTS_PATTERN=registry\\.localhost|k3d-registry\\.localhost|gitea\\.localhost|woodpecker\\.localhost|argocd\\.localhost|demo\\.localhost|mlflow\\.localhost|minio\\.localhost|apps\\.localhost|k8s\\.localhost|dashboard\\.localhost"
+podman machine ssh -- "grep -v -E '!HOSTS_PATTERN!' /etc/hosts > /tmp/hosts && printf '!PODMAN_GATEWAY! !HOSTS_NAMES!\n' >> /tmp/hosts && cat /tmp/hosts | sudo tee /etc/hosts > /dev/null" >nul 2>nul
+
+REM Configure insecure registries
+for /f "tokens=*" %%i in ('podman network inspect k3d --format "{{range .IPAM.Config}}{{.Subnet}}{{end}}" 2^>nul') do set "K3D_SUBNET=%%i"
+if "!K3D_SUBNET!"=="" set "K3D_SUBNET=10.89.0.0/16"
+podman machine ssh -- "grep -q '!K3D_SUBNET!' /etc/containers/registries.conf || printf '\n[[registry]]\nlocation = \"!K3D_SUBNET!\"\ninsecure = true\n\n[[registry]]\nlocation = \"registry.localhost:5002\"\ninsecure = true\n' | sudo tee -a /etc/containers/registries.conf > /dev/null" >nul 2>nul
+
+echo [Start] √ Machine configured
+
+REM ============================================================================
+REM PHASE 4: Create Network with DNS
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 4: Creating Network
+echo ========================================
+
+podman network create gitopslab 2>nul
+echo [Start] √ gitopslab network ready
+
+REM ============================================================================
+REM PHASE 5: Start Services (Native Podman Run)
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 5: Starting Services
+echo ========================================
+
+REM Preflight: Check for zombie registry containers
+echo [Start] Checking for zombie registry containers...
+set "ZOMBIE_COUNT=0"
+for /f "tokens=*" %%i in ('podman ps -a --filter "ancestor=docker.io/library/registry:2" --format "{{.ID}}" 2^>nul') do (
+    set /a ZOMBIE_COUNT+=1
+    echo [Start] ! Found zombie registry container: %%i
+)
+if !ZOMBIE_COUNT! gtr 0 (
+    echo [Start] ! WARNING: Found !ZOMBIE_COUNT! zombie registry container^(s^) from old compose versions
+    echo [Start] ! These will be removed to free port 5002
+)
+
+REM Clean up old containers
+echo [Start] Cleaning up old containers...
+podman rm -f gitea woodpecker-server woodpecker-agent platform-bootstrap k3d-registry.localhost k3d-gitopslab-server-0 k3d-gitopslab-serverlb >nul 2>nul
+
+REM Kill ALL registry containers (including zombies)
+echo [Start] Removing all registry containers...
+for /f "tokens=*" %%i in ('podman ps -a --filter "ancestor=docker.io/library/registry:2" --format "{{.ID}}" 2^>nul') do (
+    echo [Start]   Removing registry container %%i
+    podman rm -f %%i >nul 2>nul
+)
+for /f "tokens=*" %%i in ('podman ps -a --filter "name=registry" --format "{{.ID}}" 2^>nul') do (
+    podman rm -f %%i >nul 2>nul
+)
+
+REM Create volumes
+echo [Start] Creating volumes...
+podman volume create gitea-data >nul 2>nul
+podman volume create woodpecker-data >nul 2>nul
+echo [Start] √ Volumes created
+
+REM Start Gitea
+echo [Start] Starting Gitea...
+podman run -d ^
+  --name gitea ^
+  --restart unless-stopped ^
+  --network gitopslab ^
+  -p %GITEA_HTTP_PORT%:3000 ^
+  -p %GITEA_SSH_PORT%:22 ^
+  -v gitea-data:/data ^
+  --add-host gitea.localhost:%HOST_GATEWAY_IP% ^
+  --add-host woodpecker.localhost:%HOST_GATEWAY_IP% ^
+  --add-host argocd.localhost:%HOST_GATEWAY_IP% ^
+  --add-host demo.localhost:%HOST_GATEWAY_IP% ^
+  --add-host minio.localhost:%HOST_GATEWAY_IP% ^
+  --add-host mlflow.localhost:%HOST_GATEWAY_IP% ^
+  -e USER_UID=1000 ^
+  -e USER_GID=1000 ^
+  -e GITEA__security__INSTALL_LOCK=true ^
+  -e GITEA__server__DOMAIN=gitea.localhost ^
+  -e GITEA__server__ROOT_URL=%GITEA_PUBLIC_URL% ^
+  gitea/gitea:%GITEA_VERSION%
+
 if !errorlevel! neq 0 (
-    set "CTR_BIN=docker"
+    echo [ERROR] Failed to start Gitea
+    echo [FIX] Check logs: podman logs gitea
+    pause
+    exit /b 1
 )
 
-REM Generate dashboard token and save locally
-echo [Start] Fetching Kubernetes Dashboard token...
-%CTR_BIN% exec platform-bootstrap /workspace/scripts/dashboard-token.sh > dashboard-token.txt 2>nul
-set "TOKEN_SIZE=0"
-if exist dashboard-token.txt (
-    for %%I in (dashboard-token.txt) do set "TOKEN_SIZE=%%~zI"
+REM Wait for Gitea
+echo [Start] Waiting for Gitea...
+:wait_gitea
+podman exec gitea curl -f -s http://localhost:3000/api/healthz >nul 2>nul
+if errorlevel 1 (
+    "%SystemRoot%\System32\timeout.exe" /t 2 /nobreak >nul
+    goto :wait_gitea
 )
-if !TOKEN_SIZE! gtr 40 (
-    echo [Start] Dashboard token saved to dashboard-token.txt
-) else (
-    del /q dashboard-token.txt 2>nul
-    echo [Warn] Could not fetch dashboard token automatically. Use podman exec platform-bootstrap /workspace/scripts/dashboard-token.sh
+echo [Start] √ Gitea ready
+
+REM Pre-provision OAuth
+echo [Start] Pre-provisioning Woodpecker OAuth...
+podman run --rm --network gitopslab ^
+  -v "%CD%:/workspace:ro" ^
+  -v "%CD%\.env:/workspace/.env:rw" ^
+  -e GITEA_INTERNAL_URL=http://gitea:3000 ^
+  -e GITEA_ADMIN_USER=%GITEA_ADMIN_USER% ^
+  -e GITEA_ADMIN_PASSWORD=%GITEA_ADMIN_PASSWORD% ^
+  -e WOODPECKER_HOST=%WOODPECKER_HOST% ^
+  localhost/gitopslab_bootstrap:latest bash /workspace/scripts/pre-provision-oauth.sh
+
+if !errorlevel! equ 0 (
+    echo [Start] √ OAuth configured
+    REM Reload .env
+    for /f "usebackq eol=# tokens=1,2 delims==" %%A in (.env) do (
+        if not "%%~A"=="" set "%%A=%%B"
+    )
 )
 
-REM Collect credentials/tokens for convenience
-echo [Start] Collecting credentials...
-%CTR_BIN% exec platform-bootstrap /workspace/scripts/collect-creds.sh > credentials.txt 2>nul
-if exist credentials.txt (
-    echo [Start] Credentials saved to credentials.txt
-) else (
-    echo [Warn] Could not collect credentials automatically.
+REM Start Woodpecker Server
+echo [Start] Starting Woodpecker Server...
+podman run -d ^
+  --name woodpecker-server ^
+  --restart unless-stopped ^
+  --network gitopslab ^
+  -p %WOODPECKER_SERVER_PORT%:8000 ^
+  -v woodpecker-data:/var/lib/woodpecker ^
+  --add-host localhost:%HOST_GATEWAY_IP% ^
+  --add-host gitea.localhost:%HOST_GATEWAY_IP% ^
+  --add-host woodpecker.localhost:%HOST_GATEWAY_IP% ^
+  --add-host argocd.localhost:%HOST_GATEWAY_IP% ^
+  --add-host demo.localhost:%HOST_GATEWAY_IP% ^
+  --add-host minio.localhost:%HOST_GATEWAY_IP% ^
+  --add-host mlflow.localhost:%HOST_GATEWAY_IP% ^
+  -e WOODPECKER_OPEN=true ^
+  -e WOODPECKER_HOST=%WOODPECKER_HOST% ^
+  -e WOODPECKER_GITEA=true ^
+  -e WOODPECKER_GITEA_URL=%WOODPECKER_GITEA_URL% ^
+  -e WOODPECKER_EXPERT_FORGE_OAUTH_HOST=%WOODPECKER_EXPERT_FORGE_OAUTH_HOST% ^
+  -e WOODPECKER_EXPERT_WEBHOOK_HOST=%WOODPECKER_EXPERT_WEBHOOK_HOST% ^
+  -e WOODPECKER_GITEA_CLIENT=%WOODPECKER_GITEA_CLIENT% ^
+  -e WOODPECKER_GITEA_SECRET=%WOODPECKER_GITEA_SECRET% ^
+  -e WOODPECKER_AGENT_SECRET=%WOODPECKER_AGENT_SECRET% ^
+  -e WOODPECKER_ADMIN=%WOODPECKER_ADMIN% ^
+  woodpeckerci/woodpecker-server:%WOODPECKER_VERSION%
+
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to start Woodpecker Server
+    echo [FIX] Check logs: podman logs woodpecker-server
+    pause
+    exit /b 1
+)
+echo [Start] √ Woodpecker Server started
+
+REM Start Woodpecker Agent
+echo [Start] Starting Woodpecker Agent...
+podman run -d ^
+  --name woodpecker-agent ^
+  --restart unless-stopped ^
+  --network gitopslab ^
+  -v /run/podman/podman.sock:/var/run/docker.sock ^
+  --add-host gitea.localhost:%HOST_GATEWAY_IP% ^
+  --add-host woodpecker.localhost:%HOST_GATEWAY_IP% ^
+  --add-host argocd.localhost:%HOST_GATEWAY_IP% ^
+  --add-host demo.localhost:%HOST_GATEWAY_IP% ^
+  --add-host minio.localhost:%HOST_GATEWAY_IP% ^
+  --add-host mlflow.localhost:%HOST_GATEWAY_IP% ^
+  -e WOODPECKER_SERVER=woodpecker-server:9000 ^
+  -e WOODPECKER_AGENT_SECRET=%WOODPECKER_AGENT_SECRET% ^
+  -e WOODPECKER_BACKEND=docker ^
+  -e WOODPECKER_BACKEND_DOCKER_NETWORK=gitopslab ^
+  -e WOODPECKER_BACKEND_DOCKER_DNS=8.8.8.8 ^
+  woodpeckerci/woodpecker-agent:%WOODPECKER_VERSION%
+
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to start Woodpecker Agent
+    echo [FIX] Check logs: podman logs woodpecker-agent
+    pause
+    exit /b 1
+)
+echo [Start] √ Woodpecker Agent started
+
+REM Build Bootstrap image
+echo [Start] Building bootstrap image...
+podman build -t localhost/gitopslab_bootstrap:latest bootstrap
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to build bootstrap image
+    pause
+    exit /b 1
 )
 
-echo [Start] Done! You can now access the dashboards.
-echo --------------------------------------------------------
+REM Start Bootstrap
+echo [Start] Starting bootstrap...
+podman run -d ^
+  --name platform-bootstrap ^
+  --network gitopslab ^
+  -v /run/podman/podman.sock:/var/run/docker.sock ^
+  -v "%CD%\.env:/workspace/.env" ^
+  -v "%CD%\docker-compose.yml:/workspace/docker-compose.yml:ro" ^
+  -v "%CD%\.woodpecker.yml:/workspace/.woodpecker.yml:ro" ^
+  -v "%CD%\gitops:/workspace/gitops" ^
+  -v "%CD%\hello-api:/workspace/hello-api" ^
+  -v "%CD%\ml:/workspace/ml" ^
+  -v "%CD%\scripts:/workspace/scripts:ro" ^
+  -v "%CD%\mlflow:/workspace/mlflow:ro" ^
+  --add-host registry.localhost:%HOST_GATEWAY_IP% ^
+  --add-host registry:%HOST_GATEWAY_IP% ^
+  --add-host gitea.localhost:%HOST_GATEWAY_IP% ^
+  -e BOOTSTRAP_TRACE=true ^
+  -e K3D_NETWORK=gitopslab ^
+  --entrypoint /workspace/scripts/bootstrap.sh ^
+  localhost/gitopslab_bootstrap:latest
+
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to start bootstrap
+    echo [FIX] Check logs: podman logs platform-bootstrap
+    pause
+    exit /b 1
+)
+echo [Start] √ Services started
+
+REM ============================================================================
+REM PHASE 6: Build and Push MLflow Image
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 6: MLflow Image
+echo ========================================
+
+if exist "mlflow\Dockerfile" (
+    echo [Start] Building MLflow image...
+    podman build -t localhost:5002/mlflow:lite mlflow
+    if !errorlevel! equ 0 (
+        echo [Start] Waiting for k3d registry...
+        :wait_registry
+        curl -f -s http://localhost:5002/v2/ >nul 2>nul
+        if errorlevel 1 (
+            "%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul
+            goto :wait_registry
+        )
+        
+        echo [Start] Pushing MLflow image to registry...
+        podman push localhost:5002/mlflow:lite
+        if !errorlevel! equ 0 (
+            echo [Start] √ MLflow image pushed
+        ) else (
+            echo [WARN] Failed to push MLflow image
+            echo [WARN] Run manually: podman push localhost:5002/mlflow:lite
+        )
+    ) else (
+        echo [WARN] Failed to build MLflow image
+    )
+)
+:skip_mlflow
+
+REM ============================================================================
+REM PHASE 7: Wait for Bootstrap
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Phase 7: Platform Bootstrap
+echo ========================================
+
+echo [Start] Waiting for bootstrap...
+:wait_bootstrap
+REM Check if bootstrap exited successfully
+podman ps -a --filter "name=platform-bootstrap" --format "{{.Status}}" | findstr /C:"Exited (0)" >nul 2>nul
+if !errorlevel! equ 0 (
+    goto :bootstrap_success
+)
+
+REM Check if bootstrap exited with error
+podman ps -a --filter "name=platform-bootstrap" --format "{{.Status}}" | findstr /C:"Exited" >nul 2>nul
+if !errorlevel! equ 0 (
+    echo.
+    echo [ERROR] Bootstrap failed! Last 30 lines of logs:
+    echo ========================================
+    podman logs --tail 30 platform-bootstrap
+    echo ========================================
+    echo.
+    pause
+    exit /b 1
+)
+
+REM Still running, wait more
+"%SystemRoot%\System32\timeout.exe" /t 2 /nobreak >nul
+goto :wait_bootstrap
+
+:bootstrap_success
+
+echo [Start] √ Bootstrap complete
+
+REM ============================================================================
+REM DONE
+REM ============================================================================
+echo.
+echo ========================================
+echo [Start] Platform Ready!
+echo ========================================
+echo.
 echo GitOps Stack:
 echo   Gitea:       http://gitea.localhost:%GITEA_HTTP_PORT%
-echo   Gitea SSH:   ssh://git@gitea.localhost:%GITEA_SSH_PORT%
 echo   Woodpecker:  http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
-echo   Registry:    http://registry.localhost:%REGISTRY_HTTP_PORT%/v2/
 echo   Argo CD:     http://argocd.localhost:%ARGOCD_PORT%
+echo.
 echo MLOps Stack:
 echo   MLflow:      http://mlflow.localhost:%MLFLOW_PORT%
-echo   MinIO API:   http://minio.localhost:%MINIO_API_PORT%
-echo   MinIO UI:    http://minio.localhost:%MINIO_CONSOLE_PORT%
-echo   Demo App:    http://demo.localhost:8088
-echo   ML Predict:  http://demo.localhost:8088/predict
+echo   MinIO:       http://minio.localhost:%MINIO_CONSOLE_PORT%
+echo.
 echo Platform:
-echo   Ingress/LB:  http://apps.localhost:8080
-echo   K8s API:     https://k8s.localhost:%K3D_API_PORT%  (k3d %K3D_CLUSTER_NAME%)
 echo   K8s Dashboard: https://dashboard.localhost:32443
-echo   K8s Dashboard (apps): https://dashboard.localhost:32443/#/overview?namespace=apps
-echo --------------------------------------------------------
-"%SystemRoot%\System32\timeout.exe" /t 5 /nobreak >nul 2>&1
+echo.
+echo ========================================
+echo FIRST-TIME SETUP (if needed):
+echo ========================================
+echo If Woodpecker repository is not activated:
+echo   1. Open: http://woodpecker.localhost:%WOODPECKER_SERVER_PORT%
+echo   2. Click "Login with Gitea"
+echo   3. Authorize the application
+echo   4. Re-run start.bat to complete setup
+echo.
+echo Credentials:
+echo   Username: %GITEA_ADMIN_USER%
+echo   Password: %GITEA_ADMIN_PASSWORD%
+echo ========================================
+echo.
+echo.
+echo [Start] Collecting credentials to credentials.txt...
+podman exec platform-bootstrap bash /workspace/scripts/collect-creds.sh > credentials.txt 2>nul
+if !errorlevel! equ 0 (
+    echo [Start] √ Credentials saved to credentials.txt
+) else (
+    echo [Start] ! Could not collect credentials (cluster may not be ready)
+)
+echo.
+timeout /t 5 /nobreak >nul 2>nul
 exit /b 0

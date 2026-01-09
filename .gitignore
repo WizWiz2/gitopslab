@@ -17,6 +17,11 @@ ml/artifacts/
 
 # Logs / temp
 *.log
+*.stackdump
+*.backup
+*.bundle
+*.tar.gz
+.temp_*
 tmp/
 
 # IDE / OS

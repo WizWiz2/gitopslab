@@ -70,23 +70,51 @@ hash_value() {
 }
 
 restart_woodpecker_server() {
-    if ! command -v docker >/dev/null 2>&1; then
-        log "docker CLI not available; please restart start.bat"
-        return
+    if ! command -v docker > /dev/null 2>&1; then
+        log "ERROR: docker CLI not available, cannot restart Woodpecker"
+        return 1
     fi
-    if ! docker compose version >/dev/null 2>&1; then
-        if command -v apk >/dev/null 2>&1; then
-            log "docker compose missing; installing..."
-            apk add --no-cache docker-cli-compose >/dev/null 2>&1 || true
+    
+    # Ensure docker compose is available
+    if ! docker compose version > /dev/null 2>&1; then
+        if command -v apk > /dev/null 2>&1; then
+            log "Installing docker-cli-compose..."
+            apk add --no-cache docker-cli-compose > /dev/null 2>&1 || true
         fi
     fi
-    if docker compose version >/dev/null 2>&1; then
-        log "Recreating woodpecker-server to apply OAuth credentials..."
-        (docker compose -f /workspace/docker-compose.yml --env-file /workspace/.env up -d --force-recreate woodpecker-server) >/dev/null 2>&1 || \
-            log "Failed to recreate woodpecker-server; please rerun start.bat"
-    else
-        log "docker compose not available; please restart start.bat"
+    
+    if ! docker compose version > /dev/null 2>&1; then
+        log "ERROR: docker compose not available, cannot restart Woodpecker"
+        return 1
     fi
+    
+    log "Recreating woodpecker-server and woodpecker-agent to apply OAuth credentials..."
+    local retries=0
+    local max_retries=3
+    
+    while [ $retries -lt $max_retries ]; do
+        if docker compose -f /workspace/docker-compose.yml --env-file /workspace/.env up -d --force-recreate woodpecker-server woodpecker-agent 2>&1; then
+            log "Waiting for Woodpecker to be ready..."
+            sleep 5
+            
+            # Verify Woodpecker is running
+            if docker ps --filter "name=woodpecker-server" --format "{{.Status}}" | grep -q "Up"; then
+                log "Woodpecker server restarted successfully"
+                return 0
+            else
+                log "Woodpecker server not running after restart, retrying..."
+            fi
+        else
+            log "Failed to recreate Woodpecker (attempt $((retries + 1))/$max_retries)"
+        fi
+        
+        retries=$((retries + 1))
+        sleep 3
+    done
+    
+    log "ERROR: Failed to restart Woodpecker after $max_retries attempts"
+    log "Please check 'podman logs woodpecker-server' and rerun start.bat"
+    return 1
 }
 
 ensure_woodpecker_oauth() {
@@ -184,13 +212,18 @@ ensure_woodpecker_oauth() {
             set_env_value "WOODPECKER_OAUTH_LAST_SYNC" "$new_hash"
         fi
         log "Woodpecker OAuth credentials updated in .env"
-        restart_woodpecker_server
+        if ! restart_woodpecker_server; then
+            log "FATAL: Failed to restart Woodpecker with new OAuth credentials"
+            exit 1
+        fi
     else
         log "Woodpecker OAuth app already configured"
     fi
 }
 
-ensure_woodpecker_oauth
+# OAuth is now pre-provisioned in start.bat before Woodpecker starts
+# This eliminates the need to restart Woodpecker during bootstrap
+# ensure_woodpecker_oauth
 
 log "Ensuring Woodpecker internal/public URLs..."
 set_env_value "WOODPECKER_GITEA_URL" "${GITEA_URL}"

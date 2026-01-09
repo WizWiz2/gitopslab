@@ -33,22 +33,6 @@ services:
     networks:
       - k3d
 
-  registry:
-    image: registry:${REGISTRY_VERSION}
-    container_name: registry
-    restart: unless-stopped
-    ports:
-      - "${REGISTRY_HTTP_PORT}:5000"
-    volumes:
-      - registry-data:/var/lib/registry
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "http://localhost:5000/v2/" ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-    networks:
-      - k3d
-
   woodpecker-server:
     image: woodpeckerci/woodpecker-server:${WOODPECKER_VERSION}
     container_name: woodpecker-server
@@ -62,8 +46,6 @@ services:
       - WOODPECKER_HOST=${WOODPECKER_HOST}
       - WOODPECKER_GITEA=true
       - WOODPECKER_GITEA_URL=${WOODPECKER_GITEA_URL}
-      - WOODPECKER_GITEA_CLIENT=${WOODPECKER_GITEA_CLIENT}
-      - WOODPECKER_GITEA_SECRET=${WOODPECKER_GITEA_SECRET}
       - WOODPECKER_EXPERT_FORGE_OAUTH_HOST=${WOODPECKER_EXPERT_FORGE_OAUTH_HOST}
       - WOODPECKER_EXPERT_WEBHOOK_HOST=${WOODPECKER_EXPERT_WEBHOOK_HOST}
       - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
@@ -115,7 +97,6 @@ services:
     container_name: platform-bootstrap
     depends_on:
       - gitea
-      - registry
       - woodpecker-server
     env_file:
       - .env
@@ -136,13 +117,13 @@ services:
     entrypoint: [ "/workspace/scripts/bootstrap.sh" ]
     extra_hosts:
       - "registry.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
+      - "registry:${HOST_GATEWAY_IP:-10.89.0.1}"
       - "gitea.localhost:${HOST_GATEWAY_IP:-10.89.0.1}"
     networks:
       - k3d
 
 volumes:
   gitea-data:
-  registry-data:
   woodpecker-data:
 
 

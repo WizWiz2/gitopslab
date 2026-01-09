@@ -1,13 +1,33 @@
 @echo off
 setlocal
 
-REM Run end-to-end test: commit in Gitea -> Woodpecker -> ArgoCD -> deploy
-REM Usage: run-e2e.bat [timeoutSeconds]
+echo [E2E] Initializing The Ritual of Stabilization (Pytest Flow)...
 
-set "TIMEOUT_SEC=%~1"
-if "%TIMEOUT_SEC%"=="" set "TIMEOUT_SEC=600"
+REM Check Python
+where python >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [E2E] Python not found!
+    exit /b 1
+)
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "chcp 65001 >$null; & '%~dp0tests\e2e.ps1' -TimeoutSec %TIMEOUT_SEC%; exit $LASTEXITCODE"
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+REM Ensure pytest is installed
+python -c "import pytest" >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [E2E] Installing dependencies...
+    pip install -r tests/requirements.txt
+)
 
+REM Run the tests
+echo [E2E] Running tests/test_e2e_flow.py...
+python -m pytest tests/test_e2e_flow.py -v --capture=tee-sys -s
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [E2E] RITUAL FAILED. The system is unstable.
+    echo [E2E] Check the logs above for the exact point of failure.
+    exit /b 1
+)
+
+echo.
+echo [E2E] RITUAL COMPLETE. Balance is restored.
 endlocal

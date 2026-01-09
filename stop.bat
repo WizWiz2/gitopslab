@@ -94,10 +94,31 @@ if not "%COMPOSE_BIN%"=="" (
 )
 
 echo [Stop] Stopping standalone containers...
-for %%N in (platform-bootstrap woodpecker-server woodpecker-agent gitea registry k3d-registry.localhost) do (
+for %%N in (platform-bootstrap woodpecker-server woodpecker-agent gitea) do (
     %CTR_BIN% stop %%N >nul 2>&1
     %CTR_BIN% rm %%N >nul 2>&1
 )
+
+echo [Stop] Removing all registry containers (including zombies)...
+REM Kill k3d registry
+%CTR_BIN% stop k3d-registry.localhost >nul 2>&1
+%CTR_BIN% rm k3d-registry.localhost >nul 2>&1
+
+REM Kill any standalone registry:2 containers (zombies from old compose versions)
+for /f "tokens=*" %%i in ('%CTR_BIN% ps -a --filter "ancestor=docker.io/library/registry:2" --format "{{.ID}}" 2^>nul') do (
+    echo [Stop]   Removing registry container %%i
+    %CTR_BIN% stop %%i >nul 2>&1
+    %CTR_BIN% rm %%i >nul 2>&1
+)
+
+REM Also check by name pattern
+for /f "tokens=*" %%i in ('%CTR_BIN% ps -a --filter "name=registry" --format "{{.ID}}" 2^>nul') do (
+    %CTR_BIN% stop %%i >nul 2>&1
+    %CTR_BIN% rm %%i >nul 2>&1
+)
+
+echo [Stop] Deleting k3d registry...
+k3d registry delete registry.localhost >nul 2>&1
 
 echo [Stop] Stopping k3d cluster...
 REM Stop k3d cluster properly

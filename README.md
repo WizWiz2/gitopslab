@@ -26,6 +26,25 @@ Just run `start.bat`. It will create the configuration file, download a local Do
 - Demo app: http://demo.localhost:8088
 - ML Predict: http://demo.localhost:8088/predict
 
+### First-Time Setup
+
+> **⚠️ IMPORTANT**: On first run, you need to complete a one-time manual step to activate Woodpecker CI.
+
+After running `start.bat`, the platform will start but Woodpecker repository won't be activated automatically. To complete the setup:
+
+1. **Open Woodpecker**: http://woodpecker.localhost:8000
+2. **Click "Login with Gitea"**
+3. **Authorize the application** (you'll be redirected to Gitea)
+4. **Re-run `start.bat`** to complete automatic repository activation
+
+**Default Credentials:**
+- Username: `gitops`
+- Password: `gitops1234`
+
+This is a **ONE-TIME** step. After the first login, all subsequent runs of `start.bat` will be fully automated.
+
+> **Why is this needed?** Woodpecker uses OAuth authentication with Gitea. The first login creates your user account in Woodpecker's database, which is required before the automation scripts can activate repositories and configure webhooks.
+
 ### Lifecycle Management
 
 **Start Platform:**

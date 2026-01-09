@@ -37,8 +37,20 @@ get_woodpecker_token() {
 
 user_row=$(woodpecker_sql "select id,hash from users where login='${REPO_OWNER}' limit 1;" | tr -d '\r' || true)
 if [ -z "$user_row" ]; then
-    log "Woodpecker user ${REPO_OWNER} not found. Log in once at ${WOODPECKER_PUBLIC_URL} and re-run start."
-    exit 1
+    log "=========================================="
+    log "⚠️  MANUAL STEP REQUIRED"
+    log "=========================================="
+    log "Woodpecker user '${REPO_OWNER}' not found in database."
+    log ""
+    log "To complete setup:"
+    log "  1. Open: ${WOODPECKER_PUBLIC_URL}"
+    log "  2. Click 'Login with Gitea'"
+    log "  3. Authorize the application"
+    log "  4. Re-run: start.bat"
+    log ""
+    log "This is a ONE-TIME setup step."
+    log "=========================================="
+    exit 0
 fi
 user_id="${user_row%%|*}"
 user_hash="${user_row#*|}"

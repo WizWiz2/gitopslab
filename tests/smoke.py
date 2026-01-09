@@ -9,6 +9,9 @@ import time
 from typing import Dict, List, Tuple
 import requests
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class HealthChecker:
@@ -89,7 +92,7 @@ class HealthChecker:
         """Verify Gitea is accessible"""
         try:
             response = requests.get(
-                "http://gitea.localhost:3000/api/v1/version",
+                f"http://{self.gateway_ip}:3000/api/v1/version",
                 timeout=5
             )
             return response.status_code == 200
@@ -101,7 +104,7 @@ class HealthChecker:
         """Verify Woodpecker is accessible"""
         try:
             response = requests.get(
-                "http://woodpecker.localhost:8000/healthz",
+                f"http://{self.gateway_ip}:8000/healthz",
                 timeout=5
             )
             return response.status_code == 200

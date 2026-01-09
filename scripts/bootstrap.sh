@@ -19,13 +19,26 @@ if ! command -v k3d >/dev/null 2>&1; then
 fi
 
 create_registry() {
-  if k3d registry list | grep -q "${K3D_REGISTRY_NAME}"; then
-    log "registry ${K3D_REGISTRY_NAME} already exists"
-    docker start "k3d-${K3D_REGISTRY_NAME}" >/dev/null 2>&1 || true
-    return
-  fi
-  log "creating k3d registry ${K3D_REGISTRY_NAME}"
-  k3d registry create ${K3D_REGISTRY_NAME} --port ${K3D_REGISTRY_PORT} --default-network "${K3D_NETWORK:-bridge}"
+  local registry_container="k3d-${K3D_REGISTRY_NAME}"
+  
+  log "ensuring registry ${K3D_REGISTRY_NAME} exists on network ${K3D_NETWORK:-k3d}"
+  # Force delete existing registry to avoid port conflicts
+  k3d registry delete "${K3D_REGISTRY_NAME}" >/dev/null 2>&1 || true
+  docker rm -f "${registry_container}" >/dev/null 2>&1 || true
+  
+  log "creating k3d registry ${K3D_REGISTRY_NAME} on port 5002"
+  k3d registry create "${K3D_REGISTRY_NAME}" --port 5002 --default-network "${K3D_NETWORK:-k3d}"
+
+  log "waiting for registry container ${registry_container} to be ready"
+  local attempts=0
+  until docker ps --filter "name=${registry_container}" --format "{{.Status}}" | grep -q "Up"; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 30 ]; then
+      log "registry container did not start"
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 build_mlflow_image() {
@@ -33,13 +46,29 @@ build_mlflow_image() {
     log "mlflow build context not found; skipping image build"
     return
   fi
-  if docker image inspect "${MLFLOW_IMAGE}" >/dev/null 2>&1; then
-    log "mlflow image already built (${MLFLOW_IMAGE})"
-  else
-    log "building mlflow image ${MLFLOW_IMAGE}"
-    docker build -t "${MLFLOW_IMAGE}" /workspace/mlflow
+  
+  log "preparing mlflow image"
+  docker build -t mlflow:lite /workspace/mlflow
+  
+  # Try pushing to registry within k3d network first, fallback to host port
+  local push_success=false
+  for registry_addr in "k3d-registry.localhost:5000" "registry.localhost:5002"; do
+    local push_image="${registry_addr}/mlflow:lite"
+    log "attempting to push mlflow image to ${push_image}"
+    docker tag mlflow:lite "${push_image}"
+    if docker push "${push_image}" 2>&1; then
+      log "successfully pushed to ${push_image}"
+      push_success=true
+      break
+    else
+      log "failed to push to ${push_image}, trying next option..."
+    fi
+  done
+  
+  if [ "$push_success" = false ]; then
+    log "ERROR: failed to push mlflow image to any registry"
+    return 1
   fi
-  docker push "${MLFLOW_IMAGE}"
 }
 
 create_cluster() {
@@ -140,8 +169,10 @@ patch_registry_hosts() {
     host_ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "k3d-${K3D_CLUSTER_NAME}-serverlb" 2>/dev/null || true)
   fi
   if [ -z "$host_ip" ]; then
-    host_ip="10.88.0.1"
+    log "ERROR: could not determine host IP for registry.localhost"
+    return 1
   fi
+  log "using host IP ${host_ip} for registry.localhost in k3d nodes"
   k3d node list --no-headers | awk '{print $1}' | while read -r node; do
     [ -z "$node" ] && continue
     docker exec "$node" sh -c "grep -v 'registry.localhost' /etc/hosts > /tmp/hosts && echo \"${host_ip} registry.localhost\" >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
@@ -155,8 +186,6 @@ ensure_kubeconfig() {
     log "fetching kubeconfig for ${K3D_CLUSTER_NAME}"
     k3d kubeconfig get ${K3D_CLUSTER_NAME} > "$KUBECONFIG"
   fi
-  # For bootstrap access, use the DNS name which is stable
-  # IP addresses can change in Podman, but DNS name k3d-${K3D_CLUSTER_NAME}-server-0 is constant
   local server_host="k3d-${K3D_CLUSTER_NAME}-server-0"
   
   log "Using k8s API server at ${server_host}:6443"
@@ -164,8 +193,8 @@ ensure_kubeconfig() {
   sed -i "s|https://localhost:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
   sed -i "s|https://127.0.0.1:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
   sed -i "s|https://host.containers.internal:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
-  sed -i "s|https://10.88.0.1:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
-  # Clean up regex artifacts if any
+  # Replace any IP address pattern (e.g., 10.88.0.1, 10.89.0.1, etc.)
+  sed -i "s|https://[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}:${K3D_API_PORT}|https://${server_host}:6443|g" "$KUBECONFIG"
   sed -i "s|https://:6443|https://${server_host}:6443|g" "$KUBECONFIG"
 }
 
@@ -191,7 +220,6 @@ install_argocd() {
   fi
   log "installing Argo CD"
   kubectl create namespace argocd
-  # Use bundled manifest to avoid network issues in Podman VM
   local manifest="/workspace/scripts/argocd-install.yaml"
   if [[ -f "$manifest" ]]; then
     log "using bundled ArgoCD manifest"
@@ -209,7 +237,7 @@ apply_root_app() {
 
 bootstrap() {
   create_registry
-  build_mlflow_image
+  # MLflow image is now built and pushed from host (start.bat) before bootstrap runs
   create_cluster
   ensure_loadbalancer_config
   patch_registry_hosts
@@ -217,7 +245,6 @@ bootstrap() {
   wait_for_k8s_api
   install_argocd
   
-  # Wait for Gitea and Woodpecker to be up (TCP check)
   log "Waiting for Gitea..."
   bash /workspace/scripts/wait-for.sh "http://gitea:3000"
   
@@ -262,5 +289,4 @@ log " User:       ${GITEA_ADMIN_USER:-gitops}"
 log " Password:   ${GITEA_ADMIN_PASS:-gitops1234}"
 log "--------------------------------------------------------"
 
-
-tail -f /dev/null
+exit 0

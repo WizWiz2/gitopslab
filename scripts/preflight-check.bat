@@ -1,8 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM Pre-flight checks for GitOps Lab Platform
-REM Validates environment before starting services
+REM Set Podman connection (named pipe for rootless mode)  
+if exist "\\.\pipe\podman-machine-default" (
+    set "CONTAINER_HOST=npipe:////./pipe/podman-machine-default"
+)
 
 echo [Preflight] Starting pre-flight checks...
 
