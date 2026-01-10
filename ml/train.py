@@ -62,28 +62,32 @@ def main():
                 return parsed._replace(netloc=new_netloc).geturl()
             return url
         
-        resolved_uri = resolve_localhost_url(args.tracking_uri)
-        mlflow.set_tracking_uri(resolved_uri)
-        mlflow.set_experiment(args.experiment)
-        with mlflow.start_run() as run:
-            mlflow.log_metric("accuracy", acc)
-            mlflow.log_param("commit_sha", args.commit)
-            mlflow.log_param("model_object", args.model_object)
-            mlflow.log_param("model_sha", sha)
-            mlflow.set_tag("commit_sha", args.commit)
-            mlflow.set_tag("model_object", args.model_object)
-            try:
-                import mlflow.sklearn
+        try:
+            resolved_uri = resolve_localhost_url(args.tracking_uri)
+            mlflow.set_tracking_uri(resolved_uri)
+            mlflow.set_experiment(args.experiment)
+            with mlflow.start_run() as run:
+                mlflow.log_metric("accuracy", acc)
+                mlflow.log_param("commit_sha", args.commit)
+                mlflow.log_param("model_object", args.model_object)
+                mlflow.log_param("model_sha", sha)
+                mlflow.set_tag("commit_sha", args.commit)
+                mlflow.set_tag("model_object", args.model_object)
+                try:
+                    import mlflow.sklearn
 
-                model_name = os.getenv("MLFLOW_MODEL_NAME")
-                if model_name:
-                    mlflow.sklearn.log_model(model, artifact_path="model", registered_model_name=model_name)
-                else:
-                    mlflow.sklearn.log_model(model, artifact_path="model")
-            except Exception as exc:
-                print(f"[train] mlflow model logging skipped: {exc}")
-            mlflow.log_artifact(str(args.output))
-            print(f"[train] mlflow run {run.info.run_id}")
+                    model_name = os.getenv("MLFLOW_MODEL_NAME")
+                    if model_name:
+                        mlflow.sklearn.log_model(model, artifact_path="model", registered_model_name=model_name)
+                    else:
+                        mlflow.sklearn.log_model(model, artifact_path="model")
+                except Exception as exc:
+                    print(f"[train] mlflow model logging skipped: {exc}")
+                mlflow.log_artifact(str(args.output))
+                print(f"[train] mlflow run {run.info.run_id}")
+        except Exception as e:
+            print(f"[train] WARNING: MLflow logging failed, but model was saved. Error: {e}")
+            # Do NOT fail the script if MLflow fails, as long as the model key artifacts are produced
 
 
 if __name__ == "__main__":

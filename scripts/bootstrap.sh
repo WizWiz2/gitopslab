@@ -172,10 +172,12 @@ patch_registry_hosts() {
     log "ERROR: could not determine host IP for registry.localhost"
     return 1
   fi
-  log "using host IP ${host_ip} for registry.localhost in k3d nodes"
+  log "using host IP ${host_ip} for registry.localhost, minio.localhost, mlflow.localhost in k3d nodes"
   k3d node list --no-headers | awk '{print $1}' | while read -r node; do
     [ -z "$node" ] && continue
     docker exec "$node" sh -c "grep -v 'registry.localhost' /etc/hosts > /tmp/hosts && echo \"${host_ip} registry.localhost\" >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
+    docker exec "$node" sh -c "grep -v 'minio.localhost' /etc/hosts > /tmp/hosts && echo \"${host_ip} minio.localhost\" >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
+    docker exec "$node" sh -c "grep -v 'mlflow.localhost' /etc/hosts > /tmp/hosts && echo \"${host_ip} mlflow.localhost\" >> /tmp/hosts && cat /tmp/hosts > /etc/hosts"
   done
 }
 
