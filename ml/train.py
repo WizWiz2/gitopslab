@@ -21,7 +21,7 @@ def train(output: pathlib.Path):
     X_train, X_test, y_train, y_test = train_test_split(
         iris.data, iris.target, test_size=0.2, random_state=42, stratify=iris.target
     )
-    model = LogisticRegression(max_iter=200, random_state=42, multi_class="auto")
+    model = LogisticRegression(max_iter=200, random_state=42)
     model.fit(X_train, y_train)
     acc = model.score(X_test, y_test)
     bundle = {"model": model, "target_names": list(iris.target_names), "accuracy": acc}
@@ -52,8 +52,18 @@ def main():
 
     if args.tracking_uri:
         import mlflow
-
-        mlflow.set_tracking_uri(args.tracking_uri)
+        from urllib.parse import urlparse
+        
+        # Resolve .localhost domains for Windows compatibility
+        def resolve_localhost_url(url):
+            parsed = urlparse(url)
+            if parsed.hostname and parsed.hostname.endswith('.localhost'):
+                new_netloc = f"localhost:{parsed.port}" if parsed.port else "localhost"
+                return parsed._replace(netloc=new_netloc).geturl()
+            return url
+        
+        resolved_uri = resolve_localhost_url(args.tracking_uri)
+        mlflow.set_tracking_uri(resolved_uri)
         mlflow.set_experiment(args.experiment)
         with mlflow.start_run() as run:
             mlflow.log_metric("accuracy", acc)

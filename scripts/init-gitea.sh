@@ -28,6 +28,16 @@ else
     log "Admin user already exists"
 fi
 
+# Fix repository permissions and git config for E2E tests
+# This ensures API-based pushes work correctly on Windows/Podman environments
+log "Fixing Gitea repository permissions..."
+docker exec gitea sh -c "chown -R git:git /data/git/repositories 2>/dev/null || chown -R 1000:1000 /data/git/repositories" || true
+
+# Configure git to allow pushes to checked out branches (needed for API-based commits)
+log "Configuring git receive settings for API pushes..."
+docker exec gitea sh -c "find /data/git/repositories -name '*.git' -type d -exec git -C {} config receive.denyCurrentBranch ignore \; 2>/dev/null" || true
+
+
 set_env_value() {
     local key="$1"
     local value="$2"

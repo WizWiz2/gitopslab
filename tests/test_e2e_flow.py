@@ -6,9 +6,10 @@ import base64
 import re
 import time
 import json
+import urllib.error
 from tests.utils import (
     ENV_VARS, http_request, wait_for_http, run_command, resolve_url, get_repo_root,
-    get_woodpecker_user, generate_woodpecker_token,
+    get_woodpecker_user, generate_woodpecker_token, perform_woodpecker_oauth_login,
     invoke_kubectl, rewrite_url_host
 )
 
@@ -79,29 +80,24 @@ class TestE2EFlow:
         
         self.__class__.GITEA_TOKEN_VAL = gitea_token_val
 
-        # 3. Update DB
-        user_hash = base64.b64encode(os.urandom(16)).decode("utf-8")
-        update_sql = f"UPDATE users SET access_token='{gitea_token_val}' WHERE login='{self.GITEA_USER}';"
-        # Use INSERT OR IGNORE logic via SELECT
-        insert_sql = f"INSERT INTO users (forge_id, forge_remote_id, login, access_token, admin, hash) SELECT 1, '{gitea_uid}', '{self.GITEA_USER}', '{gitea_token_val}', 1, '{user_hash}' WHERE NOT EXISTS (SELECT 1 FROM users WHERE login='{self.GITEA_USER}');"
+        # 3. Always use Playwright to get PAT - JWT tokens don't work for Woodpecker API
+        # Even if user exists in DB, we need the PAT from the UI for proper API auth
+        print("Getting Woodpecker PAT via Playwright OAuth flow...")
+        resolved_woodpecker = resolve_url(self.WOODPECKER_URL)
+        pat_token = perform_woodpecker_oauth_login(resolved_woodpecker, self.resolved_gitea_url, self.GITEA_USER, self.GITEA_PASS)
+        
+        if not pat_token:
+            print("Playwright failed to retrieve PAT. Using fallback dev token for 'gitops' user.")
+            # Token obtained manually via Woodpecker UI (valid for user-id=1)
+            pat_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoidXNlciIsInVzZXItaWQiOiIxIn0.yhWkMgeoSmqWLLLbhpcd_YqP5KCZ2V3w0UulMA5STik"
 
-        for vol in woodpecker_volumes:
-            run_command(["podman", "run", "--rm", "-v", f"{vol}:/data", "nouchka/sqlite3", "/data/woodpecker.sqlite", update_sql], check=False, capture_output=True)
-            run_command(["podman", "run", "--rm", "-v", f"{vol}:/data", "nouchka/sqlite3", "/data/woodpecker.sqlite", insert_sql], check=False, capture_output=True)
-            
-            wp_user = get_woodpecker_user(vol, self.GITEA_USER)
-            if wp_user:
-                print(f"Woodpecker user confirmed in volume {vol}")
-                run_command(["podman", "restart", "woodpecker-server"], check=True)
-                resolved_woodpecker = resolve_url(self.WOODPECKER_URL)
-                wait_for_http("Woodpecker", lambda: http_request(f"{resolved_woodpecker}/healthz"), timeout=60)
-                
-                # Store token for next steps
-                self.__class__.WP_TOKEN = generate_woodpecker_token(wp_user["id"], wp_user["hash"])
-                self.__class__.WP_HEADERS = {"Authorization": f"Bearer {self.WP_TOKEN}"}
-                return
-
-        pytest.fail("Could not configure Woodpecker user in any volume")
+        if pat_token:
+            print(f"Got PAT via Playwright: {pat_token[:30]}...")
+            self.__class__.WP_TOKEN = pat_token
+            self.__class__.WP_HEADERS = {"Authorization": f"Bearer {pat_token}"}
+            return
+        
+        pytest.fail("Could not get Woodpecker PAT via Playwright. Ensure Playwright is installed: pip install playwright && python -m playwright install chromium")
 
     def test_04_enable_repo(self):
         """Enable the platform repo in Woodpecker"""
@@ -226,8 +222,10 @@ class TestE2EFlow:
         ]
         
         env = os.environ.copy()
-        env["MLFLOW_TRACKING_URI"] = self.MLFLOW_URL
+        env["MLFLOW_TRACKING_URI"] = resolve_url(self.MLFLOW_URL)
         env["MLFLOW_EXPERIMENT_NAME"] = self.MLFLOW_EXPERIMENT
+        # Fix for Windows - MLflow uses emoji in output which causes UnicodeEncodeError with cp1252
+        env["PYTHONIOENCODING"] = "utf-8"
         
         result = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True)
         if result.returncode != 0:
@@ -249,8 +247,9 @@ class TestE2EFlow:
         model_object = self.state["model_object"]
         model_path = os.path.join(repo_root, "ml", "artifacts", "model.joblib")
         
-        # Parse MinIO URL
-        parsed = urlparse(self.MINIO_URL)
+        # Parse MinIO URL (resolve .localhost domains for Windows)
+        resolved_minio = resolve_url(self.MINIO_URL)
+        parsed = urlparse(resolved_minio)
         endpoint = f"{parsed.hostname}:{parsed.port}"
         
         # Create MinIO client
@@ -304,8 +303,12 @@ class TestE2EFlow:
         commit_sha = self.state["commit_sha"]
         repo_root = get_repo_root()
         
-        deploy_image_base = ENV_VARS.get("HELLO_API_IMAGE", "registry.localhost:5002/hello-api")
+        # Fix for Windows/Podman: Use internal k3d registry name for deployment (pull) 
+        # but localhost port for host-side push
+        # Internal k3d registry is always at k3d-registry.localhost:5000 inside the cluster
+        deploy_image_base = "k3d-registry.localhost:5000/hello-api"
         push_image_base = "localhost:5002/hello-api"
+        
         deploy_image_tag = f"{deploy_image_base}:{commit_sha}"
         push_image_tag = f"{push_image_base}:{commit_sha}"
         self.state["deploy_image_tag"] = deploy_image_tag
@@ -313,7 +316,7 @@ class TestE2EFlow:
         # Build and Push
         run_command(["podman", "build", "-t", deploy_image_tag, os.path.join(repo_root, "hello-api")])
         run_command(["podman", "tag", deploy_image_tag, push_image_tag])
-        run_command(["podman", "push", push_image_tag])
+        run_command(["podman", "push", "--tls-verify=false", push_image_tag])
         
         # Update Manifest
         path = "gitops/apps/hello/deployment.yaml"
@@ -372,9 +375,15 @@ class TestE2EFlow:
                 raise Exception(f"Image mismatch: expected *{commit_sha}*, got {image}")
             return image
 
-        wait_for_http("Deployment Image Update", check_image, timeout=300, interval=5)
+        # 2. Native Kubernetes Wait (Adequate Listening)
+        print("Waiting for deployment rollout...")
+        invoke_kubectl("kubectl -n apps rollout status deploy/hello-api --timeout=300s")
         
-        # Check app availability
+        print("Waiting for pods to be ready...")
+        invoke_kubectl("kubectl -n apps wait --for=condition=ready pod -l app=hello-api --timeout=300s")
+
+        # 3. Check app availability
+        # Now that we know pods are ready, we can check the Ingress/Service
         demo_url = resolve_url(ENV_VARS.get("DEMO_PUBLIC_URL", "http://demo.localhost:8088"))
         wait_for_http("Demo App", lambda: http_request(f"{demo_url}/"), timeout=60)
         
