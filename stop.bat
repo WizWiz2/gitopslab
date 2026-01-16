@@ -152,6 +152,10 @@ if "%CLEAN_MODE%"=="1" (
     echo [Stop] CLEAN MODE: Removing k3d network...
     %CTR_BIN% network rm k3d >nul 2>&1
     
+    echo [Stop] CLEAN MODE: Pruning unused images and build cache...
+    %CTR_BIN% image prune -a -f >nul 2>&1
+    %CTR_BIN% builder prune -a -f >nul 2>&1
+    
     echo [Stop] CLEAN MODE: Complete - system reset to initial state
 ) else (
     echo [Stop] SOFT MODE: Volumes and data preserved
